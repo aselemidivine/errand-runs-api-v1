@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ErrandRuns.Domain/ErrandRuns.Domain.csproj" />
+    <Project Path="src/ErrandRuns.Application/ErrandRuns.Application.csproj" />
+    <Project Path="src/ErrandRuns.Infrastructure/ErrandRuns.Infrastructure.csproj" />
+    <Project Path="src/ErrandRuns.Api/ErrandRuns.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ErrandRuns.UnitTests/ErrandRuns.UnitTests.csproj" />
+    <Project Path="tests/ErrandRuns.ArchitectureTests/ErrandRuns.ArchitectureTests.csproj" />
+  </Folder>
+</Solution>

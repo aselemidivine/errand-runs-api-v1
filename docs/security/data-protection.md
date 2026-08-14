@@ -1,0 +1,5 @@
+# Data protection
+
+Collect only operational identity, contact, route and transaction data. Password/OTP/refresh-token plaintext, access tokens, payment secrets, CVV/PIN, full bank credentials, prescription contents and KYC document contents must never be logged or stored in SQL. SQL stores private object references and minimal metadata for KYC, prescription, receipt and delivery files. Access is owner/assignment/authorized-reviewer scoped and audited.
+
+Encrypt transport with TLS and storage/provider-managed keys; use application-level encryption for payout account details that cannot be tokenized. Logs use identifiers and redacted last-four values only. Define configurable retention jobs: expired OTP/reset artifacts promptly, location detail after the operational/dispute window, rejected KYC artifacts under legal policy, and financial/audit records under Nigerian regulatory advice. Data export/deletion must preserve legally required ledger records while de-identifying unrelated profile data.

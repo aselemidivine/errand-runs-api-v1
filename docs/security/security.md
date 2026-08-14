@@ -1,0 +1,7 @@
+# Security
+
+JWT validation enforces issuer, audience, signature, expiry and a 30-second clock skew. Role policies and resource ownership are independent checks. Production secrets must come from a secret manager/environment and never source control. Refresh tokens will be random, hashed at rest, rotated transactionally and their token family revoked on reuse. OTPs will be hashed, single-use, short-lived and protected by resend/attempt counters and endpoint/identity rate limits.
+
+The API returns RFC 7807 errors without stack traces, uses explicit CORS origins, HTTPS redirect, `nosniff`, frame denial and no-referrer headers. Payment webhooks require raw-body signature validation, persistent event idempotency and server-to-server verification. Controllers/endpoints never bind domain entities. File ingestion must verify signature, MIME, extension and size, assign generated object keys, scan malware and return only short-lived scoped URLs.
+
+Security review of the implemented slice: errand mutation checks customer/assigned-runner ownership; status cannot be mass-assigned; SQL access is parameterized by EF; price is not accepted by create request; stop order is enforced; matching acceptance is constrained to the assigned runner; errors do not disclose internals. Identity issuance, webhook and file endpoints are intentionally not present yet and therefore must not be exposed as complete capabilities.
