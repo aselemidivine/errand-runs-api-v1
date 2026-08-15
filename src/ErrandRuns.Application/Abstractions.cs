@@ -9,6 +9,27 @@ public interface IRunnerMatchingService { Task<Guid?> FindRunner(Errand errand,C
 public interface IPaymentGateway { Task<PaymentIntent> CreateIntent(Guid paymentId,Money amount,CancellationToken ct); Task<bool> Verify(string providerReference,CancellationToken ct); }
 public interface ICurrentUser { Guid UserId { get; } bool IsInRole(string role); }
 public interface IClock { DateTimeOffset UtcNow { get; } }
+
+// Authentication contracts live in the application layer so the API does not
+// depend directly on the chosen identity provider or persistence technology.
+public sealed record RegisterAccount(string DisplayName, string Email, string Password);
+public sealed record Login(string Email, string Password);
+public sealed record ChangePassword(string CurrentPassword, string NewPassword);
+public sealed record AccountDetails(Guid Id, string DisplayName, string Email, string Role, RunnerStatus? RunnerStatus);
+public sealed record AuthenticationResult(AccountDetails? Account, IReadOnlyDictionary<string, string[]> Errors)
+{
+    public bool Succeeded => Account is not null && Errors.Count == 0;
+    public static AuthenticationResult Success(AccountDetails account) => new(account, new Dictionary<string, string[]>());
+    public static AuthenticationResult Failure(params string[] errors) => new(null, new Dictionary<string, string[]> { ["auth"] = errors });
+}
+public interface IAuthenticationService
+{
+    Task<AuthenticationResult> RegisterCustomer(RegisterAccount request, CancellationToken ct);
+    Task<AuthenticationResult> RegisterRunner(RegisterAccount request, CancellationToken ct);
+    Task<AuthenticationResult> ValidateCredentials(Login request, CancellationToken ct);
+    Task<AuthenticationResult> ChangePassword(Guid userId, ChangePassword request, CancellationToken ct);
+    Task<AccountDetails?> GetAccount(Guid userId, CancellationToken ct);
+}
 public sealed record PaymentIntent(string Reference,string CheckoutUrl);
 public sealed record CreateStop(int Sequence,StopType Type,string Address,decimal Latitude,decimal Longitude,string? Instructions);
 public sealed record CreateErrand(string Title,ErrandCategory Category,DateTimeOffset? ScheduledFor,IReadOnlyList<CreateStop> Stops);

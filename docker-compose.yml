@@ -10,6 +10,7 @@ services:
     build: .
     environment:
       ASPNETCORE_ENVIRONMENT: Development
+      Database__ApplyMigrations: "true"
       ConnectionStrings__SqlServer: Server=sql,1433;Database=ErrandRuns;User Id=sa;Password=${ERRANDRUNS_DB_PASSWORD};TrustServerCertificate=True
       Jwt__SigningKey: ${ERRANDRUNS_JWT_KEY}
       ExternalServices__GoogleMaps__Enabled: ${GOOGLE_MAPS_ENABLED:-false}

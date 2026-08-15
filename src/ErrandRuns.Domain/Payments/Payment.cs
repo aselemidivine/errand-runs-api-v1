@@ -1,7 +1,14 @@
 using ErrandRuns.Domain.Common;
 namespace ErrandRuns.Domain.Payments;
 
-public enum PaymentStatus { Pending, Authorized, Confirmed, Failed, Refunded }
+public enum PaymentStatus
+{
+    Pending,
+    Authorized,
+    Confirmed,
+    Failed,
+    Refunded
+}
 public sealed class Payment
 {
     private Payment() { ProviderReference = string.Empty; IdempotencyKey = string.Empty; }
