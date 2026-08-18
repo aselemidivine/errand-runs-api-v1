@@ -26,7 +26,7 @@ dotnet restore ErrandRuns.slnx
 dotnet run --project src/ErrandRuns.Api --urls http://localhost:5055
 ```
 
-Open `http://localhost:5055/swagger`, register a customer or runner, copy the returned access token, choose **Authorize**, and call `GET /api/v1/auth/me`.
+Open `http://localhost:5055/swagger`, register a customer or runner, copy the returned `accessToken`, choose **Authorize**, and paste only the token. Do not type `Bearer`; Swagger adds that prefix automatically. Then call `GET /api/v1/auth/me`.
 
 ## Run without Docker (SQL Server LocalDB)
 

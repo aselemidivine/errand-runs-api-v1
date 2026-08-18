@@ -101,6 +101,8 @@ builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Keep claim names predictable across framework versions.
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new()
         {
             ValidateIssuer = true,
@@ -114,6 +116,9 @@ builder.Services
                 Encoding.UTF8.GetBytes(signingKey)),
 
             ValidateLifetime = true,
+
+            NameClaimType = JwtRegisteredClaimNames.Name,
+            RoleClaimType = "role",
 
             // Allow a small amount of clock difference between systems.
             ClockSkew = TimeSpan.FromSeconds(30)
@@ -148,7 +153,8 @@ builder.Services.AddSwaggerGen(options =>
             Scheme = "bearer",
             BearerFormat = "JWT",
             Description =
-                "Enter the JWT access token returned by login or registration."
+                "Paste only the accessToken returned by login or registration. " +
+                "Do not include the 'Bearer ' prefix; Swagger adds it automatically."
         });
 
     options.AddSecurityRequirement(
@@ -418,6 +424,29 @@ auth.MapGet(
     .ProducesProblem(StatusCodes.Status404NotFound)
     .RequireAuthorization();
 
+// Update the shared customer or runner account profile.
+auth.MapPut(
+        "/me",
+        async (
+            UpdateAccount request,
+            ICurrentUser current,
+            IAuthenticationService accounts,
+            CancellationToken ct) =>
+        {
+            var result = await accounts.UpdateAccount(current.UserId, request, ct);
+            return result.Succeeded
+                ? Results.Ok(result.Account)
+                : Results.ValidationProblem(result.Errors);
+        })
+    .WithSummary("Update the signed-in account")
+    .WithDescription(
+        "Updates the display name, phone number, and profile bio. " +
+        "Changing the phone number clears its verified status.")
+    .Produces<AccountDetails>()
+    .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .RequireAuthorization();
+
 // Allow the authenticated user to change their password.
 auth.MapPost(
         "/change-password",
@@ -445,6 +474,49 @@ auth.MapPost(
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .ProducesProblem(StatusCodes.Status401Unauthorized)
     .RequireAuthorization();
+
+// Start password recovery. Production delivery will use the configured email provider.
+auth.MapPost(
+        "/forgot-password",
+        async (
+            ForgotPassword request,
+            IAuthenticationService accounts,
+            IHostEnvironment environment,
+            CancellationToken ct) =>
+        {
+            var ticket = await accounts.CreatePasswordReset(request, ct);
+
+            // Never disclose whether an email exists. The token is returned only in
+            // Development so the flow can be tested before an email adapter is enabled.
+            return environment.IsDevelopment() && ticket is not null
+                ? Results.Ok(ticket)
+                : Results.Accepted();
+        })
+    .WithSummary("Request a password reset")
+    .WithDescription(
+        "Always returns success to prevent account enumeration. In Development, " +
+        "an existing account's reset token is returned for local API testing.")
+    .Produces<PasswordResetTicket>()
+    .Produces(StatusCodes.Status202Accepted)
+    .AllowAnonymous();
+
+// Complete password recovery using the one-time Identity token.
+auth.MapPost(
+        "/reset-password",
+        async (
+            ResetPassword request,
+            IAuthenticationService accounts,
+            CancellationToken ct) =>
+        {
+            var result = await accounts.ResetPassword(request, ct);
+            return result.Succeeded
+                ? Results.NoContent()
+                : Results.ValidationProblem(result.Errors);
+        })
+    .WithSummary("Reset a forgotten password")
+    .Produces(StatusCodes.Status204NoContent)
+    .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+    .AllowAnonymous();
 
 // Customer-owned errand endpoints.
 var errands = app
@@ -588,19 +660,19 @@ public sealed class JwtTokenIssuer(IConfiguration configuration)
             new[]
             {
                 new Claim(
-                    ClaimTypes.NameIdentifier,
+                    JwtRegisteredClaimNames.Sub,
                     account.Id.ToString()),
 
                 new Claim(
-                    ClaimTypes.Name,
+                    JwtRegisteredClaimNames.Name,
                     account.DisplayName),
 
                 new Claim(
-                    ClaimTypes.Email,
+                    JwtRegisteredClaimNames.Email,
                     account.Email),
 
                 new Claim(
-                    ClaimTypes.Role,
+                    "role",
                     account.Role)
             };
 
@@ -646,7 +718,7 @@ public sealed class HttpCurrentUser(IHttpContextAccessor accessor)
         Guid.TryParse(
             accessor.HttpContext?
                 .User
-                .FindFirstValue(ClaimTypes.NameIdentifier),
+                .FindFirstValue(JwtRegisteredClaimNames.Sub),
             out var id)
             ? id
             : throw new UnauthorizedAccessException();

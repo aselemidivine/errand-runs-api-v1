@@ -10,7 +10,7 @@ Production-oriented .NET 10 modular monolith for ErrandRuns. The implemented fir
 
 ## API reference
 
-Register or sign in using the authentication endpoints below; both return a JWT bearer access token. In Swagger, click **Authorize**, paste the returned `accessToken`, then use **Try it out** on protected operations. Tokens contain the account's `Customer` or `Runner` role, which is enforced by the errand endpoints.
+Register or sign in using the authentication endpoints below; both return a JWT bearer access token. In Swagger, click **Authorize** and paste only the returned `accessToken` (without writing `Bearer`); Swagger adds that prefix automatically. Tokens contain the account's `Customer` or `Runner` role, which is enforced by the errand endpoints.
 
 | Method | Route | Required role | Purpose |
 | --- | --- | --- | --- |
@@ -18,7 +18,10 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/auth/runners/register` | None | Creates a runner account, an Applicant runner profile, and returns a JWT. |
 | POST | `/api/v1/auth/login` | None | Signs in either account type and returns a JWT. |
 | GET | `/api/v1/auth/me` | Customer or Runner | Returns the signed-in account; runner responses include runner status. |
+| PUT | `/api/v1/auth/me` | Customer or Runner | Updates the display name, phone number, and profile bio. |
 | POST | `/api/v1/auth/change-password` | Customer or Runner | Changes the signed-in account password. |
+| POST | `/api/v1/auth/forgot-password` | None | Starts password recovery without disclosing whether the account exists. |
+| POST | `/api/v1/auth/reset-password` | None | Sets a new password using a password-reset token. |
 | POST | `/api/v1/errands` | Customer | Creates a multi-stop errand. The request must contain two or more stops and at least one `Delivery` stop. |
 | POST | `/api/v1/errands/{id}/match` | Customer owner | Assigns the highest-ranked available runner. The errand must be in `PaymentConfirmed`. |
 | POST | `/api/v1/errands/{id}/accept` | Assigned runner | Accepts an assigned errand. |

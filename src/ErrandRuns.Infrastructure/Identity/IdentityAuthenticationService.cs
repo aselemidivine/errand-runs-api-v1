@@ -23,7 +23,14 @@ public sealed class IdentityAuthenticationService(
 
     public async Task<AuthenticationResult> ValidateCredentials(Login request, CancellationToken ct)
     {
-        var user = await users.FindByEmailAsync(request.Email.Trim());
+        var identifier = request.EmailOrPhone ?? request.Email;
+        if (string.IsNullOrWhiteSpace(identifier) || string.IsNullOrWhiteSpace(request.Password))
+            return AuthenticationResult.Failure("Email or phone and password are required.");
+
+        identifier = identifier.Trim();
+        var user = identifier.Contains('@')
+            ? await users.FindByEmailAsync(identifier)
+            : await users.Users.SingleOrDefaultAsync(value => value.PhoneNumber == identifier, ct);
         if (user is null || !await users.CheckPasswordAsync(user, request.Password))
             return AuthenticationResult.Failure("Email or password is incorrect.");
 
@@ -47,6 +54,51 @@ public sealed class IdentityAuthenticationService(
         return user is null ? null : await ToAccount(user, ct);
     }
 
+    public async Task<AuthenticationResult> UpdateAccount(Guid userId, UpdateAccount request, CancellationToken ct)
+    {
+        var user = await users.FindByIdAsync(userId.ToString());
+        if (user is null) return AuthenticationResult.Failure("Account was not found.");
+        if (string.IsNullOrWhiteSpace(request.DisplayName))
+            return AuthenticationResult.Failure("Display name is required.");
+        if (request.DisplayName.Trim().Length > 120)
+            return AuthenticationResult.Failure("Display name cannot exceed 120 characters.");
+        if (request.Bio?.Trim().Length > 300)
+            return AuthenticationResult.Failure("Bio cannot exceed 300 characters.");
+
+        var phone = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim();
+        if (phone is not null && await users.Users.AnyAsync(value => value.Id != userId && value.PhoneNumber == phone, ct))
+            return AuthenticationResult.Failure("Phone number is already in use.");
+
+        var phoneChanged = !string.Equals(user.PhoneNumber, phone, StringComparison.Ordinal);
+        user.UpdateProfile(request.DisplayName, phone, request.Bio);
+        if (phoneChanged) user.PhoneNumberConfirmed = false;
+
+        var result = await users.UpdateAsync(user);
+        return result.Succeeded
+            ? AuthenticationResult.Success(await ToAccount(user, ct))
+            : Failure(result);
+    }
+
+    public async Task<PasswordResetTicket?> CreatePasswordReset(ForgotPassword request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Email)) return null;
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null) return null;
+        return new PasswordResetTicket(await users.GeneratePasswordResetTokenAsync(user));
+    }
+
+    public async Task<AuthenticationResult> ResetPassword(ResetPassword request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Token) || string.IsNullOrWhiteSpace(request.NewPassword))
+            return AuthenticationResult.Failure("Email, reset token, and new password are required.");
+        var user = await users.FindByEmailAsync(request.Email.Trim());
+        if (user is null) return AuthenticationResult.Failure("The password reset request is invalid.");
+        var result = await users.ResetPasswordAsync(user, request.Token, request.NewPassword);
+        return result.Succeeded
+            ? AuthenticationResult.Success(await ToAccount(user, ct))
+            : Failure(result);
+    }
+
     private async Task<AuthenticationResult> Register(RegisterAccount request, string role, bool createRunnerProfile, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
@@ -55,7 +107,11 @@ public sealed class IdentityAuthenticationService(
         var roleResult = await EnsureRole(role);
         if (!roleResult.Succeeded) return Failure(roleResult);
 
-        var user = new ApplicationUser(request.DisplayName, request.Email);
+        var phone = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim();
+        if (phone is not null && await users.Users.AnyAsync(value => value.PhoneNumber == phone, ct))
+            return AuthenticationResult.Failure("Phone number is already in use.");
+
+        var user = new ApplicationUser(request.DisplayName, request.Email, phone);
         var createResult = await users.CreateAsync(user, request.Password);
         if (!createResult.Succeeded) return Failure(createResult);
 
@@ -86,7 +142,16 @@ public sealed class IdentityAuthenticationService(
         var runnerStatus = role == "Runner"
             ? await db.Runners.AsNoTracking().Where(r => r.UserId == user.Id).Select(r => (RunnerStatus?)r.Status).SingleOrDefaultAsync(ct)
             : null;
-        return new AccountDetails(user.Id, user.DisplayName, user.Email ?? string.Empty, role, runnerStatus);
+        return new AccountDetails(
+            user.Id,
+            user.DisplayName,
+            user.Email ?? string.Empty,
+            user.PhoneNumber,
+            user.EmailConfirmed,
+            user.PhoneNumberConfirmed,
+            user.Bio,
+            role,
+            runnerStatus);
     }
 
     private static AuthenticationResult Failure(IdentityResult result) =>
