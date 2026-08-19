@@ -24,7 +24,7 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<IdentityUserLogin<Guid>>().ToTable("UserLogins", "identity");
         b.Entity<IdentityRoleClaim<Guid>>().ToTable("RoleClaims", "identity");
         b.Entity<IdentityUserToken<Guid>>().ToTable("UserTokens", "identity");
-        b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); });
+        b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
         b.Entity<RunnerProfile>(e => { e.ToTable("RunnerProfiles", "runners"); e.HasKey(x => x.UserId); e.Property(x => x.Rating).HasPrecision(3, 2); e.HasIndex(x => x.Status); e.HasOne<ApplicationUser>().WithOne().HasForeignKey<RunnerProfile>(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
         b.Entity<Payment>(e => { e.ToTable("Payments", "payments"); e.HasKey(x => x.Id); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => x.IdempotencyKey).IsUnique(); e.HasIndex(x => x.ProviderReference).IsUnique().HasFilter("[ProviderReference] <> ''"); e.ComplexProperty(x => x.Amount, m => { m.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2); m.Property(x => x.Currency).HasColumnName("Currency").HasMaxLength(3); }); });
     }
@@ -32,9 +32,17 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
 public sealed class ErrandRepository(ErrandRunsDbContext db) : IErrandRepository
 {
     public async Task Add(Errand value, CancellationToken ct) => await db.Errands.AddAsync(value, ct);
-    public Task<Errand?> Find(Guid id, CancellationToken ct) => db.Errands.Include(x => x.Stops).SingleOrDefaultAsync(x => x.Id == id, ct);
-    public async Task<IReadOnlyList<Errand>> ListForUser(Guid id, bool runner, int skip, int take, CancellationToken ct) => await db.Errands.AsNoTracking().Where(x => runner ? x.RunnerId == id : x.CustomerId == id).OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
+    public Task<Errand?> Find(Guid id, CancellationToken ct) => db.Errands.Include(x => x.Stops).Include(x => x.Items).SingleOrDefaultAsync(x => x.Id == id, ct);
+    public async Task<IReadOnlyList<Errand>> ListForUser(Guid id, bool runner, bool? active, int skip, int take, CancellationToken ct) => await Filter(id, runner, active).AsNoTracking().OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
+    public Task<int> CountForUser(Guid id, bool runner, bool? active, CancellationToken ct) => Filter(id, runner, active).CountAsync(ct);
     public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
+    private IQueryable<Errand> Filter(Guid id, bool runner, bool? active)
+    {
+        var query = db.Errands.Where(x => runner ? x.RunnerId == id : x.CustomerId == id);
+        if (active is true) query = query.Where(x => x.Status != ErrandStatus.Completed && x.Status != ErrandStatus.Cancelled && x.Status != ErrandStatus.Failed);
+        if (active is false) query = query.Where(x => x.Status == ErrandStatus.Completed || x.Status == ErrandStatus.Cancelled || x.Status == ErrandStatus.Failed);
+        return query;
+    }
 }
 public sealed class RunnerRepository(ErrandRunsDbContext db) : IRunnerRepository
 {

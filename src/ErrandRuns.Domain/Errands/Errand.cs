@@ -88,6 +88,7 @@ public sealed class ErrandStop
         Address = string.IsNullOrWhiteSpace(address)
             ? throw new DomainException("Address is required.")
             : address.Trim();
+        if (Address.Length > 500) throw new DomainException("Address cannot exceed 500 characters.");
         Location = location;
         Instructions = instructions;
     }
@@ -123,9 +124,34 @@ public sealed class ErrandStop
     }
 }
 
+public sealed class ErrandItem
+{
+    private ErrandItem() { Name = string.Empty; Unit = string.Empty; }
+
+    public ErrandItem(Guid id, string name, int quantity, string? unit = null, decimal? estimatedUnitPrice = null)
+    {
+        if (string.IsNullOrWhiteSpace(name)) throw new DomainException("Item name is required.");
+        if (name.Trim().Length > 160) throw new DomainException("Item name cannot exceed 160 characters.");
+        if (quantity < 1) throw new DomainException("Item quantity must be at least one.");
+        if (estimatedUnitPrice < 0) throw new DomainException("Estimated item price cannot be negative.");
+        Id = id;
+        Name = name.Trim();
+        Quantity = quantity;
+        Unit = string.IsNullOrWhiteSpace(unit) ? "item" : unit.Trim();
+        EstimatedUnitPrice = estimatedUnitPrice;
+    }
+
+    public Guid Id { get; private set; }
+    public string Name { get; private set; }
+    public int Quantity { get; private set; }
+    public string Unit { get; private set; }
+    public decimal? EstimatedUnitPrice { get; private set; }
+}
+
 public sealed class Errand
 {
     private readonly List<ErrandStop> _stops = [];
+    private readonly List<ErrandItem> _items = [];
 
     private Errand()
     {
@@ -137,15 +163,23 @@ public sealed class Errand
         Guid customerId,
         string title,
         ErrandCategory category,
-        DateTimeOffset? scheduledFor = null)
+        DateTimeOffset? scheduledFor = null,
+        string? preferredProvider = null,
+        string? specialInstructions = null)
     {
         Id = id;
         CustomerId = customerId;
         Title = string.IsNullOrWhiteSpace(title)
             ? throw new DomainException("Title is required.")
             : title.Trim();
+        if (Title.Length > 160) throw new DomainException("Title cannot exceed 160 characters.");
+        if (!Enum.IsDefined(category)) throw new DomainException("Errand category is invalid.");
+        if (preferredProvider?.Trim().Length > 160) throw new DomainException("Preferred provider cannot exceed 160 characters.");
+        if (specialInstructions?.Trim().Length > 1000) throw new DomainException("Special instructions cannot exceed 1000 characters.");
         Category = category;
         ScheduledFor = scheduledFor;
+        PreferredProvider = Clean(preferredProvider);
+        SpecialInstructions = Clean(specialInstructions);
         CreatedAt = DateTimeOffset.UtcNow;
     }
 
@@ -157,10 +191,19 @@ public sealed class Errand
     public ErrandStatus Status { get; private set; }
     public DateTimeOffset? ScheduledFor { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
+    public string? PreferredProvider { get; private set; }
+    public string? SpecialInstructions { get; private set; }
+    public decimal MerchandiseEstimate { get; private set; }
+    public decimal ServiceFee { get; private set; }
+    public string Currency { get; private set; } = "NGN";
     public byte[] RowVersion { get; private set; } = [];
 
     public IReadOnlyList<ErrandStop> Stops =>
         _stops.OrderBy(x => x.Sequence).ToList();
+
+    public IReadOnlyList<ErrandItem> Items => _items.ToList();
+
+    public decimal TotalEstimate => MerchandiseEstimate + ServiceFee;
 
     public void AddStop(ErrandStop stop)
     {
@@ -177,6 +220,13 @@ public sealed class Errand
         _stops.Add(stop);
     }
 
+    public void AddItem(ErrandItem item)
+    {
+        if (Status != ErrandStatus.Draft) throw new DomainException("Items can only be changed in draft.");
+        if (_items.Count >= 100) throw new DomainException("An errand cannot contain more than 100 items.");
+        _items.Add(item);
+    }
+
     public void RequestEstimate()
     {
         if (_stops.Count < 2 || _stops.All(x => x.Type != StopType.Delivery))
@@ -188,8 +238,16 @@ public sealed class Errand
         Transition(ErrandStatus.PendingEstimate);
     }
 
-    public void SetEstimate() =>
+    public void SetEstimate(Money serviceFee, Money merchandiseEstimate)
+    {
+        if (serviceFee.Currency != merchandiseEstimate.Currency) throw new DomainException("Estimate currency mismatch.");
         Transition(ErrandStatus.PendingPayment);
+        ServiceFee = serviceFee.Amount;
+        MerchandiseEstimate = merchandiseEstimate.Amount;
+        Currency = serviceFee.Currency;
+    }
+
+    public void SetEstimate() => SetEstimate(new Money(0), new Money(0));
 
     public void ConfirmPayment() =>
         Transition(ErrandStatus.PaymentConfirmed);
@@ -329,4 +387,7 @@ public sealed class Errand
 
         Status = target;
     }
+
+    private static string? Clean(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

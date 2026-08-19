@@ -1,6 +1,6 @@
 # UI-to-backend analysis
 
-> Limitation: the supplied attachment contained the written brief only; no UI image/source package was available. This traceability map therefore covers all screens explicitly named or described in that brief. Visual-only fields may require revision when design assets are supplied.
+> The supplied Stitch UI package was reviewed for the customer errand expansion. Grocery/laundry/pharmacy/custom inputs, item quantities, preferred providers, route stops, estimates, activity/history, tracking progress, cancellation, and completion confirmation now inform the API contracts. Private files, provider payment confirmation, real-time coordinates, and reviews remain separate integration slices.
 
 | UI screen/capability | Journey | Module / domain | API | Tables | Authorization | Events / side effects |
 |---|---|---|---|---|---|---|

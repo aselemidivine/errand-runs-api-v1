@@ -23,6 +23,13 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/auth/forgot-password` | None | Starts password recovery without disclosing whether the account exists. |
 | POST | `/api/v1/auth/reset-password` | None | Sets a new password using a password-reset token. |
 | POST | `/api/v1/errands` | Customer | Creates a multi-stop errand. The request must contain two or more stops and at least one `Delivery` stop. |
+| GET | `/api/v1/errands/categories` | Customer | Returns the grocery, laundry, pharmacy, document, and custom UI categories. |
+| GET | `/api/v1/errands` | Customer | Returns paged active errands, history, or both for the signed-in customer. |
+| GET | `/api/v1/errands/{id}` | Customer owner | Returns route stops, requested items, instructions, and estimate details. |
+| GET | `/api/v1/errands/{id}/estimate` | Customer owner | Returns the server-calculated service fee and total estimate. |
+| GET | `/api/v1/errands/{id}/tracking` | Customer owner | Returns stop progress and the assigned runner ID. |
+| POST | `/api/v1/errands/{id}/cancel` | Customer owner | Cancels an errand that has not already completed or been cancelled. |
+| POST | `/api/v1/errands/{id}/confirm-completion` | Customer owner | Confirms receipt after every stop has been completed. |
 | POST | `/api/v1/errands/{id}/match` | Customer owner | Assigns the highest-ranked available runner. The errand must be in `PaymentConfirmed`. |
 | POST | `/api/v1/errands/{id}/accept` | Assigned runner | Accepts an assigned errand. |
 | POST | `/api/v1/errands/{id}/stops/{stopId}/start` | Assigned runner | Starts the next pending stop after the runner has begun their journey. |

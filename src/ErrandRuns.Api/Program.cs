@@ -4,6 +4,7 @@ using System.Text;
 
 using ErrandRuns.Application;
 using ErrandRuns.Domain.Common;
+using ErrandRuns.Domain.Errands;
 using ErrandRuns.Infrastructure;
 using ErrandRuns.Infrastructure.Configuration;
 using ErrandRuns.Infrastructure.Identity;
@@ -523,6 +524,34 @@ var errands = app
     .MapGroup("/api/v1/errands")
     .RequireAuthorization();
 
+// Return the curated customer categories represented by the mobile UI.
+errands.MapGet(
+        "/categories",
+        () => Results.Ok(
+            new[]
+            {
+                new ErrandCategoryDetails(ErrandCategory.Grocery, "Grocery Run", "Groceries and household items from a preferred store.", true, true, false),
+                new ErrandCategoryDetails(ErrandCategory.Laundry, "Laundry Pickup", "Wash-and-fold or dry-cleaning pickup and delivery.", true, true, false),
+                new ErrandCategoryDetails(ErrandCategory.Pharmacy, "Pharmacy", "Prescription or over-the-counter pharmacy collection.", true, true, true),
+                new ErrandCategoryDetails(ErrandCategory.DocumentCollection, "Document Collection", "Secure pickup and delivery of documents.", false, false, false),
+                new ErrandCategoryDetails(ErrandCategory.Custom, "Custom Errand", "A detailed customer-defined task or multi-stop route.", true, true, false)
+            }))
+    .WithTags("Customer errands")
+    .WithSummary("List supported errand categories")
+    .Produces<IReadOnlyList<ErrandCategoryDetails>>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+// List the signed-in customer's active errands, history, or both.
+errands.MapGet(
+        "/",
+        async (bool? active, int page, int pageSize, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.List(active, page, pageSize, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("List the customer's errands")
+    .WithDescription("Set active=true for current activity, false for history, or omit it for both.")
+    .Produces<PagedErrands>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
 // Create a new errand.
 errands.MapPost(
         "/",
@@ -544,6 +573,57 @@ errands.MapPost(
     .ProducesProblem(StatusCodes.Status409Conflict)
     .RequireAuthorization(
         policy => policy.RequireRole("Customer"));
+
+// Return the full route, items, estimate, and progress for a customer-owned errand.
+errands.MapGet(
+        "/{id:guid}",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.Get(id, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("Get an errand")
+    .Produces<ErrandDetails>()
+    .ProducesProblem(StatusCodes.Status403Forbidden)
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/{id:guid}/estimate",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.GetEstimate(id, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("Get the server-calculated estimate")
+    .Produces<ErrandEstimate>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/{id:guid}/tracking",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.Track(id, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("Get live errand progress")
+    .WithDescription("Returns current stop progress. Runner coordinates require the future tracking-session integration.")
+    .Produces<ErrandTracking>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapPost(
+        "/{id:guid}/cancel",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.Cancel(id, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("Cancel an errand")
+    .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapPost(
+        "/{id:guid}/confirm-completion",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+            Results.Ok(await service.ConfirmCompletion(id, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("Confirm delivery and complete an errand")
+    .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
 
 // Match an errand with an available runner.
 errands.MapPost(
