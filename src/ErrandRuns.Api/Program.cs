@@ -1,13 +1,17 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 using ErrandRuns.Application;
+using ErrandRuns.Api;
 using ErrandRuns.Domain.Common;
 using ErrandRuns.Domain.Errands;
 using ErrandRuns.Infrastructure;
 using ErrandRuns.Infrastructure.Configuration;
 using ErrandRuns.Infrastructure.Identity;
+using ErrandRuns.Infrastructure.Payments;
 
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
@@ -84,9 +88,26 @@ builder.Services
 // Register application and domain services using dependency injection.
 builder.Services.AddScoped<IErrandRepository, ErrandRepository>();
 builder.Services.AddScoped<IRunnerRepository, RunnerRepository>();
+builder.Services.AddScoped<IRunnerFinanceRepository, RunnerFinanceRepository>();
+builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 builder.Services.AddScoped<ErrandService>();
+builder.Services.AddScoped<RunnerService>();
+builder.Services.AddScoped<RunnerFinanceService>();
+builder.Services.AddScoped<NotificationService>();
+builder.Services.AddScoped<INotificationPublisher>(provider=>provider.GetRequiredService<NotificationService>());
+builder.Services.AddScoped<MessagingService>();
+builder.Services.AddScoped<VoiceCallService>();
+builder.Services.AddSingleton<IRealtimeCommunications, SignalRCommunications>();
 builder.Services.AddScoped<IRunnerMatchingService, RunnerMatchingService>();
+builder.Services.AddSingleton(new RunnerCompensationPolicy(
+    builder.Configuration.GetValue<decimal?>("RunnerPayments:RunnerPercent") ?? 80m,
+    builder.Configuration.GetValue<decimal?>("RunnerPayments:PayoutFee") ?? 50m));
+
+var paystackEnabled = builder.Configuration.GetValue<bool>("ExternalServices:Paystack:Enabled");
+if (paystackEnabled) builder.Services.AddScoped<IPayoutGateway, PaystackPayoutGateway>();
+else if (builder.Environment.IsDevelopment()) builder.Services.AddScoped<IPayoutGateway, DevelopmentPayoutGateway>();
+else builder.Services.AddScoped<IPayoutGateway, UnavailablePayoutGateway>();
 
 // Pricing and clock services are stateless, so they can be registered as singletons.
 builder.Services.AddSingleton<IPricingService, PricingService>();
@@ -124,11 +145,22 @@ builder.Services
             // Allow a small amount of clock difference between systems.
             ClockSkew = TimeSpan.FromSeconds(30)
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var token = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(token) && context.HttpContext.Request.Path.StartsWithSegments("/hubs/communications"))
+                    context.Token = token;
+                return Task.CompletedTask;
+            }
+        };
     });
 
 // Enable authorization policies and common API infrastructure.
 builder.Services.AddAuthorization();
 builder.Services.AddProblemDetails();
+builder.Services.AddSignalR();
 
 // Register OpenAPI and Swagger services.
 builder.Services.AddOpenApi();
@@ -262,6 +294,8 @@ app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
+app.MapHub<CommunicationsHub>("/hubs/communications");
+
 // Configure development-only features.
 if (app.Environment.IsDevelopment())
 {
@@ -313,6 +347,37 @@ app.MapHealthChecks("/health/ready")
     .WithSummary("Readiness probe")
     .WithDescription(
         "Returns success only when the API and SQL Server are ready.")
+    .AllowAnonymous();
+
+// Reconcile asynchronous Paystack transfer outcomes using the signed raw payload.
+app.MapPost("/api/v1/payments/webhooks/paystack", async (
+        HttpRequest request,
+        IConfiguration configuration,
+        RunnerFinanceService finance,
+        CancellationToken ct) =>
+    {
+        var secret = configuration["ExternalServices:Paystack:WebhookSecret"];
+        var signature = request.Headers["x-paystack-signature"].ToString();
+        if (string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(signature))
+            return Results.Unauthorized();
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        var body = await reader.ReadToEndAsync(ct);
+        byte[] supplied;
+        try { supplied = Convert.FromHexString(signature); }
+        catch (FormatException) { return Results.Unauthorized(); }
+        var expected = HMACSHA512.HashData(Encoding.UTF8.GetBytes(secret), Encoding.UTF8.GetBytes(body));
+        if (!CryptographicOperations.FixedTimeEquals(expected, supplied)) return Results.Unauthorized();
+        using var document = JsonDocument.Parse(body);
+        var eventName = document.RootElement.GetProperty("event").GetString();
+        if (eventName is not ("transfer.success" or "transfer.failed" or "transfer.reversed"))
+            return Results.Ok();
+        var reference = document.RootElement.GetProperty("data").GetProperty("reference").GetString();
+        if (!string.IsNullOrWhiteSpace(reference))
+            await finance.ReconcilePayout(reference, eventName[9..], ct);
+        return Results.Ok();
+    })
+    .WithTags("Payments")
+    .WithSummary("Receive signed Paystack transfer status webhooks")
     .AllowAnonymous();
 
 // Authentication and authorization endpoints.
@@ -518,6 +583,110 @@ auth.MapPost(
     .Produces(StatusCodes.Status204NoContent)
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .AllowAnonymous();
+
+// Notifications shared by customers and runners.
+var notificationsApi=app.MapGroup("/api/v1/notifications").WithTags("Notifications").RequireAuthorization();
+notificationsApi.MapGet("/",async(bool? unreadOnly,int page,int pageSize,NotificationService service,CancellationToken ct)=>Results.Ok(await service.List(unreadOnly,page,pageSize,ct))).WithSummary("List notifications").Produces<PagedNotifications>();
+notificationsApi.MapPost("/{id:guid}/read",async(Guid id,NotificationService service,CancellationToken ct)=>{await service.MarkRead(id,ct);return Results.NoContent();}).WithSummary("Mark a notification as read").Produces(StatusCodes.Status204NoContent);
+
+// Participant-scoped conversations and messages.
+var conversationsApi=app.MapGroup("/api/v1/conversations").WithTags("Messaging").RequireAuthorization();
+conversationsApi.MapGet("/",async(int page,int pageSize,MessagingService service,CancellationToken ct)=>Results.Ok(await service.List(page,pageSize,ct))).WithSummary("List conversations").Produces<PagedConversations>();
+conversationsApi.MapPost("/errands/{errandId:guid}",async(Guid errandId,MessagingService service,CancellationToken ct)=>Results.Ok(await service.GetOrCreateForErrand(errandId,ct))).WithSummary("Open the conversation for an assigned errand").Produces<ConversationDetails>();
+conversationsApi.MapGet("/{id:guid}",async(Guid id,MessagingService service,CancellationToken ct)=>Results.Ok(await service.Get(id,ct))).WithSummary("Get messages in a conversation").Produces<ConversationDetails>();
+conversationsApi.MapPost("/{id:guid}/messages",async(Guid id,SendMessage request,MessagingService service,CancellationToken ct)=>Results.Created($"/api/v1/conversations/{id}",await service.Send(id,request,ct))).WithSummary("Send a message").Produces<MessageDetails>(StatusCodes.Status201Created);
+conversationsApi.MapPost("/{id:guid}/messages/{messageId:guid}/read",async(Guid id,Guid messageId,MessagingService service,CancellationToken ct)=>{await service.MarkRead(id,messageId,ct);return Results.NoContent();}).WithSummary("Mark a message as read").Produces(StatusCodes.Status204NoContent);
+
+// Voice call lifecycle; WebRTC offers, answers, and ICE candidates travel through the SignalR hub.
+var callsApi=app.MapGroup("/api/v1/calls").WithTags("Voice calls").RequireAuthorization();
+callsApi.MapPost("/",async(StartCall request,VoiceCallService service,CancellationToken ct)=>Results.Created("",await service.Start(request,ct))).WithSummary("Start a participant-to-participant voice call").Produces<VoiceCallDetails>(StatusCodes.Status201Created);
+callsApi.MapPost("/{id:guid}/answer",async(Guid id,VoiceCallService service,CancellationToken ct)=>Results.Ok(await service.Answer(id,ct))).WithSummary("Answer an incoming call").Produces<VoiceCallDetails>();
+callsApi.MapPost("/{id:guid}/decline",async(Guid id,VoiceCallService service,CancellationToken ct)=>Results.Ok(await service.Decline(id,ct))).WithSummary("Decline an incoming call").Produces<VoiceCallDetails>();
+callsApi.MapPost("/{id:guid}/end",async(Guid id,EndCall request,VoiceCallService service,CancellationToken ct)=>Results.Ok(await service.End(id,request,ct))).WithSummary("End an active or ringing call").Produces<VoiceCallDetails>();
+
+// Runner job execution, earnings, and payout endpoints.
+var runnerApi = app.MapGroup("/api/v1/runners/me")
+    .WithTags("Runner operations")
+    .RequireAuthorization(policy => policy.RequireRole("Runner"));
+
+runnerApi.MapGet("/dashboard", async (RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.Dashboard(ct)))
+    .WithSummary("Get runner dashboard")
+    .Produces<RunnerDashboard>();
+
+runnerApi.MapPut("/availability", async (SetRunnerAvailability request, RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.SetAvailability(request.Available, ct)))
+    .WithSummary("Go online or offline")
+    .Produces<RunnerDashboard>()
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapPost("/verification/submit", async (RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.SubmitVerification(ct)))
+    .WithSummary("Submit runner profile for verification")
+    .Produces<RunnerDashboard>()
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapGet("/jobs", async (bool? active, int page, int pageSize, RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.Jobs(active, page, pageSize, ct)))
+    .WithSummary("List assigned runner jobs")
+    .Produces<PagedRunnerJobs>();
+
+runnerApi.MapGet("/jobs/{id:guid}", async (Guid id, RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.Job(id, ct)))
+    .WithSummary("Get assigned job details and expected earnings")
+    .Produces<RunnerJobDetails>();
+
+runnerApi.MapPost("/jobs/{id:guid}/accept", async (Guid id, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.Accept(id, ct)))
+    .WithSummary("Accept an assigned job")
+    .Produces<ErrandSummary>();
+
+runnerApi.MapPost("/jobs/{id:guid}/decline", async (Guid id, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.Decline(id, ct)))
+    .WithSummary("Decline an assigned job and return online")
+    .Produces<ErrandSummary>();
+
+runnerApi.MapPost("/jobs/{id:guid}/start-journey", async (Guid id, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.StartJourney(id, ct)))
+    .WithSummary("Start travelling to the first stop")
+    .Produces<ErrandSummary>();
+
+runnerApi.MapPost("/jobs/{id:guid}/stops/{stopId:guid}/start", async (Guid id, Guid stopId, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.StartStop(id, stopId, ct)))
+    .WithSummary("Start the next route stop")
+    .Produces<ErrandSummary>();
+
+runnerApi.MapPost("/jobs/{id:guid}/stops/{stopId:guid}/complete", async (Guid id, Guid stopId, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.CompleteStop(id, stopId, ct)))
+    .WithSummary("Complete the active route stop")
+    .Produces<ErrandSummary>();
+
+runnerApi.MapGet("/earnings", async (int page, int pageSize, RunnerFinanceService service, CancellationToken ct) =>
+        Results.Ok(await service.Earnings(page, pageSize, ct)))
+    .WithSummary("Get available balance and transaction history")
+    .Produces<EarningsDashboard>();
+
+runnerApi.MapGet("/payout-account", async (RunnerFinanceService service, CancellationToken ct) =>
+    {
+        var account = await service.GetAccount(ct);
+        return account is null ? Results.NotFound() : Results.Ok(account);
+    })
+    .WithSummary("Get masked payout account")
+    .Produces<PayoutAccountDetails>()
+    .ProducesProblem(StatusCodes.Status404NotFound);
+
+runnerApi.MapPut("/payout-account", async (SetPayoutAccount request, RunnerFinanceService service, CancellationToken ct) =>
+        Results.Ok(await service.SetAccount(request, ct)))
+    .WithSummary("Verify and save a tokenized payout account")
+    .WithDescription("The raw account number is sent to Paystack and is never stored by ErrandRuns.")
+    .Produces<PayoutAccountDetails>();
+
+runnerApi.MapPost("/payouts", async (RequestPayout request, HttpContext context, RunnerFinanceService service, CancellationToken ct) =>
+        Results.Accepted(value: await service.RequestPayout(request, context.Request.Headers["Idempotency-Key"].ToString(), ct)))
+    .WithSummary("Withdraw available runner earnings")
+    .WithDescription("Requires an Idempotency-Key header. Paystack receives the transfer request in kobo.")
+    .Produces<PayoutDetails>(StatusCodes.Status202Accepted)
+    .ProducesProblem(StatusCodes.Status409Conflict);
 
 // Customer-owned errand endpoints.
 var errands = app

@@ -5,6 +5,7 @@ using ErrandRuns.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -12,9 +13,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace ErrandRuns.Infrastructure.Migrations
 {
     [DbContext(typeof(ErrandRunsDbContext))]
-    partial class ErrandRunsDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260819003432_AddRunnerPayoutFee")]
+    partial class AddRunnerPayoutFee
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -23,117 +26,6 @@ namespace ErrandRuns.Infrastructure.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 128);
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
-
-            modelBuilder.Entity("ErrandRuns.Domain.Communications.Conversation", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid>("CustomerId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("ErrandId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("RunnerId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CustomerId");
-
-                    b.HasIndex("ErrandId")
-                        .IsUnique();
-
-                    b.HasIndex("RunnerId");
-
-                    b.ToTable("Conversations", "communications");
-                });
-
-            modelBuilder.Entity("ErrandRuns.Domain.Communications.UserNotification", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Body")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("nvarchar(1000)");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid?>("ErrandId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset?>("ReadAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid>("RecipientId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("nvarchar(160)");
-
-                    b.Property<int>("Type")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("RecipientId", "CreatedAt");
-
-                    b.HasIndex("RecipientId", "ReadAt");
-
-                    b.ToTable("Notifications", "notifications");
-                });
-
-            modelBuilder.Entity("ErrandRuns.Domain.Communications.VoiceCallSession", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset?>("AnsweredAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<Guid>("CalleeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("CallerId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("ConversationId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<string>("EndReason")
-                        .IsRequired()
-                        .HasMaxLength(240)
-                        .HasColumnType("nvarchar(240)");
-
-                    b.Property<DateTimeOffset?>("EndedAt")
-                        .HasColumnType("datetimeoffset");
-
-                    b.Property<int>("Status")
-                        .HasColumnType("int");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CalleeId", "Status");
-
-                    b.HasIndex("ConversationId", "CreatedAt");
-
-                    b.ToTable("VoiceCalls", "communications");
-                });
 
             modelBuilder.Entity("ErrandRuns.Domain.Errands.Errand", b =>
                 {
@@ -296,11 +188,11 @@ namespace ErrandRuns.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[ErrandId] IS NOT NULL");
 
-                    b.HasIndex("RunnerId");
-
-                    b.HasIndex("PayoutId", "Type")
+                    b.HasIndex("PayoutId")
                         .IsUnique()
                         .HasFilter("[PayoutId] IS NOT NULL");
+
+                    b.HasIndex("RunnerId");
 
                     b.ToTable("RunnerLedger", "payments");
                 });
@@ -642,44 +534,6 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.HasKey("UserId", "LoginProvider", "Name");
 
                     b.ToTable("UserTokens", "identity");
-                });
-
-            modelBuilder.Entity("ErrandRuns.Domain.Communications.Conversation", b =>
-                {
-                    b.OwnsMany("ErrandRuns.Domain.Communications.ChatMessage", "Messages", b1 =>
-                        {
-                            b1.Property<Guid>("Id")
-                                .ValueGeneratedOnAdd()
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<string>("Body")
-                                .IsRequired()
-                                .HasMaxLength(2000)
-                                .HasColumnType("nvarchar(2000)");
-
-                            b1.Property<Guid>("ConversationId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<DateTimeOffset?>("ReadAt")
-                                .HasColumnType("datetimeoffset");
-
-                            b1.Property<Guid>("SenderId")
-                                .HasColumnType("uniqueidentifier");
-
-                            b1.Property<DateTimeOffset>("SentAt")
-                                .HasColumnType("datetimeoffset");
-
-                            b1.HasKey("Id");
-
-                            b1.HasIndex("ConversationId", "SentAt");
-
-                            b1.ToTable("Messages", "communications");
-
-                            b1.WithOwner()
-                                .HasForeignKey("ConversationId");
-                        });
-
-                    b.Navigation("Messages");
                 });
 
             modelBuilder.Entity("ErrandRuns.Domain.Errands.Errand", b =>

@@ -272,6 +272,14 @@ public sealed class Errand
         Transition(ErrandStatus.RunnerAccepted);
     }
 
+    public void Decline(Guid runnerId)
+    {
+        EnsureRunner(runnerId);
+        if (Status != ErrandStatus.RunnerAssigned) throw new DomainException("This assignment can no longer be declined.");
+        RunnerId = null;
+        Status = ErrandStatus.PaymentConfirmed;
+    }
+
     public void StartJourney(Guid runnerId)
     {
         EnsureRunner(runnerId);

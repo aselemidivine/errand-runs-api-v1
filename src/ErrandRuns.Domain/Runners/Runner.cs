@@ -14,4 +14,15 @@ public sealed class RunnerProfile
     public void Approve() { if (Status != RunnerStatus.PendingVerification) throw new DomainException("Invalid runner state."); Status = RunnerStatus.Verified; }
     public void SetAvailable(bool available) { if (Status is not (RunnerStatus.Verified or RunnerStatus.Available or RunnerStatus.Unavailable)) throw new DomainException("Runner is not eligible."); Status = available ? RunnerStatus.Available : RunnerStatus.Unavailable; }
     public void Assign() { if (Status != RunnerStatus.Available) throw new DomainException("Runner is unavailable."); Status = RunnerStatus.Busy; }
+    public void ReleaseAssignment()
+    {
+        if (Status != RunnerStatus.Busy) throw new DomainException("Runner has no active assignment.");
+        Status = RunnerStatus.Available;
+    }
+    public void CompleteErrand()
+    {
+        if (Status != RunnerStatus.Busy) throw new DomainException("Runner has no active assignment.");
+        CompletedErrands++;
+        Status = RunnerStatus.Available;
+    }
 }

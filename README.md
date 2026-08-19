@@ -34,9 +34,32 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/errands/{id}/accept` | Assigned runner | Accepts an assigned errand. |
 | POST | `/api/v1/errands/{id}/stops/{stopId}/start` | Assigned runner | Starts the next pending stop after the runner has begun their journey. |
 | POST | `/api/v1/errands/{id}/stops/{stopId}/complete` | Assigned runner | Completes the active stop. |
+| GET | `/api/v1/runners/me/dashboard` | Runner | Returns status, availability, rating, jobs, and withdrawable balance. |
+| POST | `/api/v1/runners/me/verification/submit` | Runner | Submits an Applicant profile for operational verification. |
+| PUT | `/api/v1/runners/me/availability` | Verified runner | Goes online or offline for matching. |
+| GET | `/api/v1/runners/me/jobs` | Runner | Returns assigned active jobs or completed history. |
+| GET | `/api/v1/runners/me/jobs/{id}` | Assigned runner | Returns route details and expected earnings. |
+| POST | `/api/v1/runners/me/jobs/{id}/accept` | Assigned runner | Accepts the job. |
+| POST | `/api/v1/runners/me/jobs/{id}/decline` | Assigned runner | Declines the job and returns the runner to Available. |
+| POST | `/api/v1/runners/me/jobs/{id}/start-journey` | Assigned runner | Starts travel to the first stop. |
+| GET | `/api/v1/runners/me/earnings` | Runner | Returns available balance and ledger transactions. |
+| GET/PUT | `/api/v1/runners/me/payout-account` | Verified runner | Reads or verifies tokenized Nigerian bank details. |
+| POST | `/api/v1/runners/me/payouts` | Verified runner | Submits an idempotent Paystack withdrawal. |
+| POST | `/api/v1/payments/webhooks/paystack` | Signed Paystack request | Reconciles successful, failed, and reversed runner transfers. |
+| GET | `/api/v1/notifications` | Customer or Runner | Returns paged notifications and unread count. |
+| POST | `/api/v1/notifications/{id}/read` | Notification owner | Marks a notification read. |
+| POST | `/api/v1/conversations/errands/{errandId}` | Errand participant | Opens the assigned errand conversation. |
+| GET | `/api/v1/conversations/{id}` | Conversation participant | Reads persisted messages. |
+| POST | `/api/v1/conversations/{id}/messages` | Conversation participant | Sends a persisted message. |
+| POST | `/api/v1/calls` | Conversation participant | Starts a voice-call session. |
+| POST | `/api/v1/calls/{id}/answer` | Call recipient | Answers a ringing call. |
+| POST | `/api/v1/calls/{id}/decline` | Call recipient | Declines a ringing call. |
+| POST | `/api/v1/calls/{id}/end` | Call participant | Ends or cancels a call. |
 | GET | `/health/live` | None | Process liveness probe. |
 | GET | `/health/ready` | None | API and database readiness probe. |
 
 Passwords require at least 8 characters, with uppercase, lowercase, and numeric characters. New runner accounts have an `Applicant` runner status and cannot be matched until the future verification workflow makes them available. Domain-rule failures return RFC 7807 Problem Details with `409`; missing resources return `404`; missing or insufficient credentials return `401` or `403`.
+
+Runner earnings are credited only when the customer confirms a completed errand. The merchandise budget is excluded: the runner receives the configured `RunnerPayments:RunnerPercent` of the service fee (80% by default). Withdrawals include the configured fee (NGN 50 by default), require an `Idempotency-Key`, and store only Paystack's recipient token plus the account-number suffix. Signed Paystack webhooks mark transfers paid; failed or reversed transfers restore the ledger balance.
 
 The UI source package was not present in the supplied attachment. The traceability analysis therefore uses every named screen/workflow in the written product brief and records this assumption.
