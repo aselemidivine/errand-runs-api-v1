@@ -26,6 +26,7 @@ services:
       ExternalServices__Termii__Enabled: ${TERMII_ENABLED:-false}
       ExternalServices__Termii__ApiKey: ${TERMII_API_KEY:-}
       ExternalServices__Termii__SenderId: ${TERMII_SENDER_ID:-ErrandRuns}
+      ExternalServices__Termii__BaseUrl: ${TERMII_BASE_URL:-https://api.ng.termii.com}
       ExternalServices__SmileIdentity__Enabled: ${SMILE_IDENTITY_ENABLED:-false}
       ExternalServices__SmileIdentity__PartnerId: ${SMILE_IDENTITY_PARTNER_ID:-}
       ExternalServices__SmileIdentity__ApiKey: ${SMILE_IDENTITY_API_KEY:-}

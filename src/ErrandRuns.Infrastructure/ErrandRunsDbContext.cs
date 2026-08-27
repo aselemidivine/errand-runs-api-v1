@@ -3,6 +3,7 @@ using ErrandRuns.Domain.Errands;
 using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Payments;
 using ErrandRuns.Domain.Runners;
+using ErrandRuns.Domain.Users;
 using ErrandRuns.Infrastructure.Identity;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
@@ -11,7 +12,7 @@ namespace ErrandRuns.Infrastructure;
 
 public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> options) : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
-    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>();
+    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>(); public DbSet<SavedLocation> SavedLocations => Set<SavedLocation>(); public DbSet<PhoneVerificationChallenge> PhoneVerificationChallenges => Set<PhoneVerificationChallenge>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -25,6 +26,9 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<IdentityUserLogin<Guid>>().ToTable("UserLogins", "identity");
         b.Entity<IdentityRoleClaim<Guid>>().ToTable("RoleClaims", "identity");
         b.Entity<IdentityUserToken<Guid>>().ToTable("UserTokens", "identity");
+        b.Entity<PhoneVerificationChallenge>(e => { e.ToTable("PhoneVerificationChallenges", "identity"); e.HasKey(x => x.Id); e.Property(x => x.PhoneNumber).HasMaxLength(32); e.HasIndex(x => new { x.UserId, x.SentAt }); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
+        b.Entity<SavedLocation>(e => { e.ToTable("SavedLocations", "identity"); e.HasKey(x => x.Id); e.Property(x => x.Label).HasMaxLength(60); e.Property(x => x.Address).HasMaxLength(500); e.Property(x => x.Latitude).HasPrecision(9, 6); e.Property(x => x.Longitude).HasPrecision(9, 6); e.Property(x => x.Landmark).HasMaxLength(240); e.Property(x => x.DeliveryInstructions).HasMaxLength(1000); e.HasIndex(x => new { x.UserId, x.UpdatedAt }); e.HasIndex(x => new { x.UserId, x.IsDefault }).IsUnique().HasFilter("[IsDefault] = 1"); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); e.HasMany(x => x.PreferredCategories).WithOne().HasForeignKey(x => x.SavedLocationId).OnDelete(DeleteBehavior.Cascade); e.Navigation(x => x.PreferredCategories).UsePropertyAccessMode(PropertyAccessMode.Field); });
+        b.Entity<SavedLocationCategory>(e => { e.ToTable("SavedLocationCategories", "identity"); e.HasKey(x => new { x.SavedLocationId, x.Category }); });
         b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
         b.Entity<RunnerProfile>(e => { e.ToTable("RunnerProfiles", "runners"); e.HasKey(x => x.UserId); e.Property(x => x.Rating).HasPrecision(3, 2); e.HasIndex(x => x.Status); e.HasOne<ApplicationUser>().WithOne().HasForeignKey<RunnerProfile>(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
         b.Entity<Payment>(e => { e.ToTable("Payments", "payments"); e.HasKey(x => x.Id); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => x.IdempotencyKey).IsUnique(); e.HasIndex(x => x.ProviderReference).IsUnique().HasFilter("[ProviderReference] <> ''"); e.ComplexProperty(x => x.Amount, m => { m.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2); m.Property(x => x.Currency).HasColumnName("Currency").HasMaxLength(3); }); });
@@ -78,6 +82,16 @@ public sealed class RunnerFinanceRepository(ErrandRunsDbContext db) : IRunnerFin
     public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
 }
 public sealed class SystemClock : IClock { public DateTimeOffset UtcNow => DateTimeOffset.UtcNow; }
+public sealed class UserPreferenceRepository(ErrandRunsDbContext db) : IUserPreferenceRepository
+{
+    public Task<int> CountLocations(Guid userId, CancellationToken ct) => db.SavedLocations.CountAsync(x => x.UserId == userId, ct);
+    public async Task<IReadOnlyList<SavedLocation>> ListLocations(Guid userId, CancellationToken ct) => await db.SavedLocations.Include(x => x.PreferredCategories).Where(x => x.UserId == userId).OrderByDescending(x => x.IsDefault).ThenByDescending(x => x.IsFavorite).ThenByDescending(x => x.UpdatedAt).ToListAsync(ct);
+    public Task<SavedLocation?> FindLocation(Guid id, CancellationToken ct) => db.SavedLocations.Include(x => x.PreferredCategories).SingleOrDefaultAsync(x => x.Id == id, ct);
+    public Task<SavedLocation?> FindDefaultLocation(Guid userId, CancellationToken ct) => db.SavedLocations.Include(x => x.PreferredCategories).SingleOrDefaultAsync(x => x.UserId == userId && x.IsDefault, ct);
+    public void AddLocation(SavedLocation location) => db.SavedLocations.Add(location);
+    public void RemoveLocation(SavedLocation location) => db.SavedLocations.Remove(location);
+    public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
+}
 public sealed class CommunicationRepository(ErrandRunsDbContext db):ICommunicationRepository
 {
     public async Task AddNotification(UserNotification value,CancellationToken ct)=>await db.Notifications.AddAsync(value,ct);

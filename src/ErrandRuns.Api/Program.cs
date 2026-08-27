@@ -89,6 +89,7 @@ builder.Services
 builder.Services.AddScoped<IErrandRepository, ErrandRepository>();
 builder.Services.AddScoped<IRunnerRepository, RunnerRepository>();
 builder.Services.AddScoped<IRunnerFinanceRepository, RunnerFinanceRepository>();
+builder.Services.AddScoped<IUserPreferenceRepository, UserPreferenceRepository>();
 builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 builder.Services.AddScoped<ErrandService>();
@@ -98,6 +99,7 @@ builder.Services.AddScoped<NotificationService>();
 builder.Services.AddScoped<INotificationPublisher>(provider=>provider.GetRequiredService<NotificationService>());
 builder.Services.AddScoped<MessagingService>();
 builder.Services.AddScoped<VoiceCallService>();
+builder.Services.AddScoped<UserPreferenceService>();
 builder.Services.AddSingleton<IRealtimeCommunications, SignalRCommunications>();
 builder.Services.AddScoped<IRunnerMatchingService, RunnerMatchingService>();
 builder.Services.AddSingleton(new RunnerCompensationPolicy(
@@ -108,6 +110,11 @@ var paystackEnabled = builder.Configuration.GetValue<bool>("ExternalServices:Pay
 if (paystackEnabled) builder.Services.AddScoped<IPayoutGateway, PaystackPayoutGateway>();
 else if (builder.Environment.IsDevelopment()) builder.Services.AddScoped<IPayoutGateway, DevelopmentPayoutGateway>();
 else builder.Services.AddScoped<IPayoutGateway, UnavailablePayoutGateway>();
+
+var termiiEnabled = builder.Configuration.GetValue<bool>("ExternalServices:Termii:Enabled");
+if (termiiEnabled) builder.Services.AddScoped<IPhoneOtpSender, TermiiPhoneOtpSender>();
+else if (builder.Environment.IsDevelopment()) builder.Services.AddScoped<IPhoneOtpSender, DevelopmentPhoneOtpSender>();
+else builder.Services.AddScoped<IPhoneOtpSender, UnavailablePhoneOtpSender>();
 
 // Pricing and clock services are stateless, so they can be registered as singletons.
 builder.Services.AddSingleton<IPricingService, PricingService>();
@@ -288,7 +295,10 @@ app.Use(
     });
 
 // Configure the HTTP request middleware pipeline.
-app.UseHttpsRedirection();
+// Local development uses the HTTP-only launch profile. Production should
+// terminate TLS at the host or reverse proxy and redirect HTTP requests.
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication();
@@ -583,6 +593,95 @@ auth.MapPost(
     .Produces(StatusCodes.Status204NoContent)
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .AllowAnonymous();
+
+// Send or resend the six-digit verification code to the phone on the account.
+auth.MapPost(
+        "/phone-verification/request",
+        async (
+            ICurrentUser current,
+            IAuthenticationService accounts,
+            IHostEnvironment environment,
+            CancellationToken ct) =>
+            Results.Accepted(
+                "/api/v1/auth/phone-verification/verify",
+                await accounts.RequestPhoneVerification(current.UserId, environment.IsDevelopment(), ct)))
+    .WithSummary("Send a phone verification OTP")
+    .WithDescription(
+        "Sends a six-digit code to the phone number on the signed-in account. " +
+        "The same route handles resend requests after the 60-second cooldown. " +
+        "The code expires after 10 minutes and is returned only in Development.")
+    .Produces<PhoneVerificationChallengeDetails>(StatusCodes.Status202Accepted)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .RequireAuthorization();
+
+auth.MapPost(
+        "/phone-verification/verify",
+        async (
+            VerifyPhoneNumber request,
+            ICurrentUser current,
+            IAuthenticationService accounts,
+            CancellationToken ct) =>
+        {
+            var result = await accounts.VerifyPhoneNumber(current.UserId, request, ct);
+            return result.Succeeded
+                ? Results.Ok(result.Account)
+                : Results.ValidationProblem(result.Errors);
+        })
+    .WithSummary("Verify the signed-in user's phone number")
+    .WithDescription(
+        "Consumes a six-digit code for its challenge. Five incorrect attempts " +
+        "invalidate the challenge and require a new code.")
+    .Produces<AccountDetails>()
+    .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .RequireAuthorization();
+
+// Saved home/work/favorite locations and their delivery preferences.
+var locationsApi = app.MapGroup("/api/v1/users/me/locations")
+    .WithTags("Saved locations")
+    .RequireAuthorization();
+
+locationsApi.MapGet("/", async (UserPreferenceService service, CancellationToken ct) =>
+        Results.Ok(await service.List(ct)))
+    .WithSummary("List the signed-in user's saved locations")
+    .Produces<IReadOnlyList<SavedLocationDetails>>();
+
+locationsApi.MapGet("/{id:guid}", async (Guid id, UserPreferenceService service, CancellationToken ct) =>
+        Results.Ok(await service.Get(id, ct)))
+    .WithSummary("Get a saved location")
+    .Produces<SavedLocationDetails>()
+    .ProducesProblem(StatusCodes.Status404NotFound);
+
+locationsApi.MapPost("/", async (SaveLocation request, UserPreferenceService service, CancellationToken ct) =>
+    {
+        var created = await service.Create(request, ct);
+        return Results.Created($"/api/v1/users/me/locations/{created.Id}", created);
+    })
+    .WithSummary("Save a home, work, or favorite delivery location")
+    .WithDescription(
+        "Stores the map pin, address, landmark, estate/gate instructions, favorite/default " +
+        "flags, and the errand categories preferred at this location.")
+    .Produces<SavedLocationDetails>(StatusCodes.Status201Created)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+locationsApi.MapPut("/{id:guid}", async (Guid id, SaveLocation request, UserPreferenceService service, CancellationToken ct) =>
+        Results.Ok(await service.Update(id, request, ct)))
+    .WithSummary("Update a saved location and delivery preferences")
+    .Produces<SavedLocationDetails>();
+
+locationsApi.MapPost("/{id:guid}/default", async (Guid id, UserPreferenceService service, CancellationToken ct) =>
+        Results.Ok(await service.SetDefault(id, ct)))
+    .WithSummary("Make a saved location the default home base")
+    .Produces<SavedLocationDetails>();
+
+locationsApi.MapDelete("/{id:guid}", async (Guid id, UserPreferenceService service, CancellationToken ct) =>
+    {
+        await service.Delete(id, ct);
+        return Results.NoContent();
+    })
+    .WithSummary("Delete a saved location")
+    .Produces(StatusCodes.Status204NoContent);
 
 // Notifications shared by customers and runners.
 var notificationsApi=app.MapGroup("/api/v1/notifications").WithTags("Notifications").RequireAuthorization();

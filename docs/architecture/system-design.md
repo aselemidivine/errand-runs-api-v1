@@ -1,5 +1,7 @@
 # System design
 
+For the current comprehensive designs, see the [UML diagram set](uml-diagrams.md), [High-level system design](high-level-system-design.md), and [Low-level system design](low-level-system-design.md). This file remains a short architectural summary.
+
 ErrandRuns is a deployable modular monolith with four dependency layers: API → Infrastructure/Application → Domain. Business invariants live in aggregates and application services; HTTP endpoints contain transport concerns only. SQL schemas provide module ownership (`app`, `runners`, `payments`) while contracts mediate module interaction.
 
 The first vertical slice implements the high-risk backbone: ordered multi-stop errands, guarded state transitions, matching, assigned-runner execution, pricing, payment model, persistence, authentication middleware and ownership checks. Later modules should follow the same slice pattern rather than introduce a shared generic repository.

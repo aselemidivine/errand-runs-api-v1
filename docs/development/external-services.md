@@ -38,4 +38,6 @@ The shorter names in `.env.example` are translated to these ASP.NET Core names b
 - Rotate a secret immediately if it is committed, pasted into logs or shared outside the authorized team.
 - Production should use Azure Key Vault, AWS Secrets Manager, Google Secret Manager or the deployment platform's equivalent.
 
-The code currently binds, validates and supplies configured HTTP clients for these providers. Actual provider adapters and business endpoints should be added with their corresponding vertical slices; configuration alone does not claim payment, messaging, KYC, storage or push workflows are implemented.
+The phone-verification slice implements Termii SMS delivery through the transactional `dnd` route. In Development with Termii disabled, the request endpoint returns `developmentCode` so the complete OTP flow can be exercised without sending SMS. Paystack runner payouts are also implemented. The remaining provider sections currently bind and validate configuration but do not by themselves claim a complete maps, email, KYC, storage, or push workflow.
+
+Set `TERMII_BASE_URL` to the regulatory base URL displayed in the Termii dashboard. Production OTP delivery also requires an approved sender ID and an activated DND/transactional route.

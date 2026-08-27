@@ -1,5 +1,7 @@
 using ErrandRuns.Application;
 using ErrandRuns.Domain.Runners;
+using ErrandRuns.Domain.Common;
+using ErrandRuns.Domain.Users;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,8 +15,12 @@ namespace ErrandRuns.Infrastructure.Identity;
 public sealed class IdentityAuthenticationService(
     UserManager<ApplicationUser> users,
     RoleManager<IdentityRole<Guid>> roles,
-    ErrandRunsDbContext db) : IAuthenticationService
+    ErrandRunsDbContext db,
+    IPhoneOtpSender otpSender,
+    IClock clock) : IAuthenticationService
 {
+    private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
     public Task<AuthenticationResult> RegisterCustomer(RegisterAccount request, CancellationToken ct) =>
         Register(request, "Customer", createRunnerProfile: false, ct);
 
@@ -65,7 +71,7 @@ public sealed class IdentityAuthenticationService(
         if (request.Bio?.Trim().Length > 300)
             return AuthenticationResult.Failure("Bio cannot exceed 300 characters.");
 
-        var phone = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim();
+        var phone = NormalizePhone(request.PhoneNumber);
         if (phone is not null && await users.Users.AnyAsync(value => value.Id != userId && value.PhoneNumber == phone, ct))
             return AuthenticationResult.Failure("Phone number is already in use.");
 
@@ -99,6 +105,88 @@ public sealed class IdentityAuthenticationService(
             : Failure(result);
     }
 
+    public async Task<PhoneVerificationChallengeDetails> RequestPhoneVerification(
+        Guid userId, bool includeDevelopmentCode, CancellationToken ct)
+    {
+        var user = await users.FindByIdAsync(userId.ToString())
+            ?? throw new KeyNotFoundException("Account was not found.");
+        var phone = NormalizePhone(user.PhoneNumber)
+            ?? throw new DomainException("Add a valid phone number before requesting verification.");
+        if (user.PhoneNumberConfirmed)
+            throw new DomainException("The phone number is already verified.");
+
+        var now = clock.UtcNow;
+        var challenge = await db.PhoneVerificationChallenges
+            .Where(x => x.UserId == userId && x.ConsumedAt == null)
+            .OrderByDescending(x => x.SentAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (challenge is not null && !challenge.CanResend(now, ResendCooldown))
+        {
+            var seconds = Math.Max(1, (int)Math.Ceiling((challenge.SentAt + ResendCooldown - now).TotalSeconds));
+            throw new DomainException($"Wait {seconds} seconds before requesting another code.");
+        }
+
+        var code = await users.GenerateChangePhoneNumberTokenAsync(user, phone);
+        var expiresAt = now + OtpLifetime;
+        if (challenge is null || !string.Equals(challenge.PhoneNumber, phone, StringComparison.Ordinal))
+        {
+            challenge = new PhoneVerificationChallenge(Guid.NewGuid(), userId, phone, now, expiresAt);
+            db.PhoneVerificationChallenges.Add(challenge);
+        }
+        else
+        {
+            challenge.Resent(now, expiresAt);
+        }
+
+        await db.SaveChangesAsync(ct);
+        try
+        {
+            await otpSender.Send(phone, code, ct);
+        }
+        catch
+        {
+            // Do not make the user wait through the resend cooldown when the
+            // provider rejected or failed to deliver the request.
+            challenge.DeliveryFailed(clock.UtcNow, ResendCooldown);
+            await db.SaveChangesAsync(ct);
+            throw;
+        }
+
+        return new PhoneVerificationChallengeDetails(challenge.Id, Mask(phone), expiresAt,
+            (int)ResendCooldown.TotalSeconds, includeDevelopmentCode ? code : null);
+    }
+
+    public async Task<AuthenticationResult> VerifyPhoneNumber(
+        Guid userId, VerifyPhoneNumber request, CancellationToken ct)
+    {
+        if (request.Code?.Length != 6 || request.Code.Any(character => !char.IsDigit(character)))
+            return AuthenticationResult.Failure("Enter the six-digit verification code.");
+
+        var challenge = await db.PhoneVerificationChallenges
+            .SingleOrDefaultAsync(x => x.Id == request.ChallengeId && x.UserId == userId, ct);
+        if (challenge is null || !challenge.IsUsable(clock.UtcNow))
+            return AuthenticationResult.Failure("The verification code is expired or no longer valid.");
+
+        var user = await users.FindByIdAsync(userId.ToString());
+        if (user is null) return AuthenticationResult.Failure("Account was not found.");
+
+        var result = await users.ChangePhoneNumberAsync(user, challenge.PhoneNumber, request.Code);
+        if (!result.Succeeded)
+        {
+            challenge.RecordFailure();
+            await db.SaveChangesAsync(ct);
+            return AuthenticationResult.Failure(
+                challenge.FailedAttempts >= 5
+                    ? "Too many incorrect attempts. Request a new code."
+                    : "The verification code is incorrect.");
+        }
+
+        challenge.Consume(clock.UtcNow);
+        await db.SaveChangesAsync(ct);
+        return AuthenticationResult.Success(await ToAccount(user, ct));
+    }
+
     private async Task<AuthenticationResult> Register(RegisterAccount request, string role, bool createRunnerProfile, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(request.DisplayName) || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.Password))
@@ -107,7 +195,7 @@ public sealed class IdentityAuthenticationService(
         var roleResult = await EnsureRole(role);
         if (!roleResult.Succeeded) return Failure(roleResult);
 
-        var phone = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim();
+        var phone = NormalizePhone(request.PhoneNumber);
         if (phone is not null && await users.Users.AnyAsync(value => value.PhoneNumber == phone, ct))
             return AuthenticationResult.Failure("Phone number is already in use.");
 
@@ -156,4 +244,23 @@ public sealed class IdentityAuthenticationService(
 
     private static AuthenticationResult Failure(IdentityResult result) =>
         AuthenticationResult.Failure(result.Errors.Select(error => error.Description).ToArray());
+
+    private static string? NormalizePhone(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var compact = new string(value.Where(character => char.IsDigit(character) || character == '+').ToArray());
+        if (compact.StartsWith("0", StringComparison.Ordinal) && compact.Length == 11)
+            compact = "+234" + compact[1..];
+        else if (compact.StartsWith("234", StringComparison.Ordinal))
+            compact = "+" + compact;
+        if (!compact.StartsWith('+') || compact.Length is < 9 or > 16 || compact[1..].Any(character => !char.IsDigit(character)))
+            throw new DomainException("Phone number must be a valid international number, for example +2348012345678.");
+        return compact;
+    }
+
+    private static string Mask(string phone)
+    {
+        var visible = phone.Length >= 4 ? phone[^4..] : phone;
+        return $"{phone[..Math.Min(4, phone.Length)]} ••• ••• {visible}";
+    }
 }

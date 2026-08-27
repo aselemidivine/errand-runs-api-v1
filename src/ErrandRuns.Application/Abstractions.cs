@@ -3,6 +3,7 @@ using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Errands;
 using ErrandRuns.Domain.Payments;
 using ErrandRuns.Domain.Runners;
+using ErrandRuns.Domain.Users;
 namespace ErrandRuns.Application;
 
 public interface IErrandRepository
@@ -39,6 +40,10 @@ public interface IPayoutGateway
 }
 public interface ICurrentUser { Guid UserId { get; } bool IsInRole(string role); }
 public interface IClock { DateTimeOffset UtcNow { get; } }
+public interface IPhoneOtpSender
+{
+    Task Send(string phoneNumber, string code, CancellationToken ct);
+}
 
 // Authentication contracts live in the application layer so the API does not
 // depend directly on the chosen identity provider or persistence technology.
@@ -49,6 +54,13 @@ public sealed record UpdateAccount(string DisplayName, string? PhoneNumber, stri
 public sealed record ForgotPassword(string Email);
 public sealed record ResetPassword(string Email, string Token, string NewPassword);
 public sealed record PasswordResetTicket(string Token);
+public sealed record PhoneVerificationChallengeDetails(
+    Guid ChallengeId,
+    string MaskedPhoneNumber,
+    DateTimeOffset ExpiresAt,
+    int RetryAfterSeconds,
+    string? DevelopmentCode = null);
+public sealed record VerifyPhoneNumber(Guid ChallengeId, string Code);
 public sealed record AccountDetails(
     Guid Id,
     string DisplayName,
@@ -75,6 +87,8 @@ public interface IAuthenticationService
     Task<AuthenticationResult> UpdateAccount(Guid userId, UpdateAccount request, CancellationToken ct);
     Task<PasswordResetTicket?> CreatePasswordReset(ForgotPassword request, CancellationToken ct);
     Task<AuthenticationResult> ResetPassword(ResetPassword request, CancellationToken ct);
+    Task<PhoneVerificationChallengeDetails> RequestPhoneVerification(Guid userId, bool includeDevelopmentCode, CancellationToken ct);
+    Task<AuthenticationResult> VerifyPhoneNumber(Guid userId, VerifyPhoneNumber request, CancellationToken ct);
 }
 public sealed record PaymentIntent(string Reference, string CheckoutUrl);
 public sealed record CreateStop(int Sequence, StopType Type, string Address, decimal Latitude, decimal Longitude, string? Instructions);
