@@ -6,7 +6,8 @@
     <Project Path="src/ErrandRuns.Api/ErrandRuns.Api.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/ErrandRuns.UnitTests/ErrandRuns.UnitTests.csproj" />
     <Project Path="tests/ErrandRuns.ArchitectureTests/ErrandRuns.ArchitectureTests.csproj" />
+    <Project Path="tests/ErrandRuns.UnitTests/ErrandRuns.UnitTests.csproj" />
+    <Project Path="tests/ErrandRuns.IntegrationTests/ErrandRuns.IntegrationTests.csproj" />
   </Folder>
 </Solution>

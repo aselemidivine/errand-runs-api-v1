@@ -1,5 +1,6 @@
 using ErrandRuns.Domain.Common;
 using ErrandRuns.Domain.Errands;
+using System.Text.Json;
 
 namespace ErrandRuns.Domain.Users;
 
@@ -25,7 +26,9 @@ public sealed class SavedLocation
         bool isFavorite,
         bool isDefault,
         IEnumerable<ErrandCategory> preferredCategories,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? googlePlaceId = null,
+        string? addressComponentsJson = null)
     {
         Id = id;
         UserId = userId;
@@ -33,7 +36,7 @@ public sealed class SavedLocation
         Address = string.Empty;
         CreatedAt = now;
         Update(label, address, latitude, longitude, landmark, deliveryInstructions,
-            isFavorite, isDefault, preferredCategories, now);
+            isFavorite, isDefault, preferredCategories, now, googlePlaceId, addressComponentsJson);
     }
 
     public Guid Id { get; private set; }
@@ -44,6 +47,8 @@ public sealed class SavedLocation
     public decimal Longitude { get; private set; }
     public string? Landmark { get; private set; }
     public string? DeliveryInstructions { get; private set; }
+    public string? GooglePlaceId { get; private set; }
+    public string? AddressComponentsJson { get; private set; }
     public bool IsFavorite { get; private set; }
     public bool IsDefault { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
@@ -60,7 +65,9 @@ public sealed class SavedLocation
         bool isFavorite,
         bool isDefault,
         IEnumerable<ErrandCategory> preferredCategories,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        string? googlePlaceId = null,
+        string? addressComponentsJson = null)
     {
         label = Required(label, 60, "Location label");
         address = Required(address, 500, "Address");
@@ -70,6 +77,9 @@ public sealed class SavedLocation
             throw new DomainException("Landmark cannot exceed 240 characters.");
         if (deliveryInstructions?.Trim().Length > 1000)
             throw new DomainException("Delivery instructions cannot exceed 1000 characters.");
+        googlePlaceId = Clean(googlePlaceId);
+        if (googlePlaceId?.Length > 255 || googlePlaceId?.Any(char.IsWhiteSpace) == true)
+            throw new DomainException("Google Place ID is invalid.");
 
         var categories = preferredCategories?.Distinct().ToArray() ?? [];
         if (categories.Length > 6)
@@ -81,6 +91,8 @@ public sealed class SavedLocation
         Longitude = longitude;
         Landmark = Clean(landmark);
         DeliveryInstructions = Clean(deliveryInstructions);
+        GooglePlaceId = googlePlaceId;
+        AddressComponentsJson = NormalizeJson(addressComponentsJson);
         IsFavorite = isFavorite;
         IsDefault = isDefault;
         UpdatedAt = now;
@@ -105,6 +117,23 @@ public sealed class SavedLocation
 
     private static string? Clean(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string? NormalizeJson(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        if (value.Length > 16000) throw new DomainException("Address components are too large.");
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            if (document.RootElement.ValueKind is not (JsonValueKind.Array or JsonValueKind.Object))
+                throw new DomainException("Address components must be a JSON object or array.");
+            return JsonSerializer.Serialize(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            throw new DomainException("Address components contain invalid JSON.");
+        }
+    }
 }
 
 public sealed class SavedLocationCategory

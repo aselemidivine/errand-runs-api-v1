@@ -1,8 +1,10 @@
 using System.IdentityModel.Tokens.Jwt;
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading.RateLimiting;
 
 using ErrandRuns.Application;
 using ErrandRuns.Api;
@@ -16,6 +18,7 @@ using ErrandRuns.Infrastructure.Payments;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -100,6 +103,7 @@ builder.Services.AddScoped<INotificationPublisher>(provider=>provider.GetRequire
 builder.Services.AddScoped<MessagingService>();
 builder.Services.AddScoped<VoiceCallService>();
 builder.Services.AddScoped<UserPreferenceService>();
+builder.Services.AddScoped<LocationDiscoveryService>();
 builder.Services.AddSingleton<IRealtimeCommunications, SignalRCommunications>();
 builder.Services.AddScoped<IRunnerMatchingService, RunnerMatchingService>();
 builder.Services.AddSingleton(new RunnerCompensationPolicy(
@@ -218,6 +222,25 @@ builder.Services
 // Protect sensitive endpoints with a fixed-window rate limiter.
 builder.Services.AddRateLimiter(
     options =>
+    {
+        options.OnRejected = async (context, cancellationToken) =>
+        {
+            context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+                context.HttpContext.Response.Headers.RetryAfter =
+                    Math.Ceiling(retryAfter.TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            await Results.Problem(
+                    statusCode: StatusCodes.Status429TooManyRequests,
+                    title: "Too many requests",
+                    detail: "The request rate limit was exceeded. Try again later.",
+                    extensions: new Dictionary<string, object?>
+                    {
+                        ["traceId"] = context.HttpContext.TraceIdentifier
+                    })
+                .ExecuteAsync(context.HttpContext);
+        };
+
         options.AddFixedWindowLimiter(
             "sensitive",
             limiter =>
@@ -225,7 +248,41 @@ builder.Services.AddRateLimiter(
                 limiter.PermitLimit = 10;
                 limiter.Window = TimeSpan.FromMinutes(1);
                 limiter.QueueLimit = 0;
-            }));
+            });
+
+        options.AddPolicy(
+            "location-search",
+            context => RateLimitPartition.GetFixedWindowLimiter(
+                context.User.FindFirstValue(JwtRegisteredClaimNames.Sub)
+                ?? context.Connection.RemoteIpAddress?.ToString()
+                ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 60,
+                    Window = TimeSpan.FromMinutes(1),
+                    QueueLimit = 0,
+                    AutoReplenishment = true
+                }));
+    });
+
+// Forwarded headers are honored only from explicitly configured proxies. This
+// lets RemoteIpAddress represent the client without trusting spoofed headers.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.ForwardLimit = Math.Clamp(
+        builder.Configuration.GetValue<int?>("ForwardedHeaders:ForwardLimit") ?? 1,
+        1,
+        5);
+
+    foreach (var configuredProxy in builder.Configuration
+                 .GetSection("ForwardedHeaders:KnownProxies")
+                 .Get<string[]>() ?? [])
+    {
+        if (IPAddress.TryParse(configuredProxy, out var proxy))
+            options.KnownProxies.Add(proxy);
+    }
+});
 
 // Configure CORS using origins defined in application configuration.
 var origins =
@@ -246,6 +303,8 @@ builder.Services.AddCors(
 // Build the application.
 var app = builder.Build();
 
+app.UseForwardedHeaders();
+
 // Convert unhandled exceptions into consistent HTTP ProblemDetails responses.
 app.UseExceptionHandler(
     errors =>
@@ -259,9 +318,12 @@ app.UseExceptionHandler(
 
                 var status = error switch
                 {
+                    BadHttpRequestException => 400,
+                    ArgumentException => 400,
                     DomainException => 409,
                     KeyNotFoundException => 404,
                     UnauthorizedAccessException => 403,
+                    ExternalServiceException external => external.StatusCode,
                     _ => 500
                 };
 
@@ -300,8 +362,8 @@ app.Use(
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 app.UseCors();
-app.UseRateLimiter();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapHub<CommunicationsHub>("/hubs/communications");
@@ -683,6 +745,65 @@ locationsApi.MapDelete("/{id:guid}", async (Guid id, UserPreferenceService servi
     .WithSummary("Delete a saved location")
     .Produces(StatusCodes.Status204NoContent);
 
+// Server-side Google discovery keeps provider credentials away from mobile clients.
+var locationSearchApi = app.MapGroup("/api/v1/location-search")
+    .WithTags("Location discovery")
+    .RequireAuthorization()
+    .RequireRateLimiting("location-search");
+
+locationSearchApi.MapGet(
+        "/autocomplete",
+        async (string? query, string? sessionToken, LocationDiscoveryService service, CancellationToken ct) =>
+            Results.Ok(await service.Autocomplete(query, sessionToken, ct)))
+    .WithSummary("Find Nigerian delivery locations")
+    .WithDescription(
+        "Uses Google Places Autocomplete (New), restricted to Nigeria and biased toward Lagos. " +
+        "Reuse one session token until a suggestion is resolved with place details.")
+    .Produces<IReadOnlyList<LocationAutocompleteSuggestion>>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status429TooManyRequests)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
+locationSearchApi.MapGet(
+        "/places/{placeId}",
+        async (string placeId, string? sessionToken, LocationDiscoveryService service, CancellationToken ct) =>
+            Results.Ok(await service.Details(placeId, sessionToken, ct)))
+    .WithSummary("Resolve a Google place")
+    .WithDescription("Requests only the place fields needed to save and display a delivery address.")
+    .Produces<GooglePlaceDetails>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
+locationSearchApi.MapGet(
+        "/reverse-geocode",
+        async (decimal? latitude, decimal? longitude, LocationDiscoveryService service, CancellationToken ct) =>
+        {
+            if (latitude is null || longitude is null)
+                throw new ArgumentException("Latitude and longitude are required.");
+
+            return Results.Ok(await service.Reverse(latitude.Value, longitude.Value, ct));
+        })
+    .WithSummary("Resolve a map pin to a deliverable street address")
+    .Produces<ReverseGeocodeDetails>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
+locationSearchApi.MapGet(
+        "/ip",
+        async (HttpContext context, LocationDiscoveryService service, CancellationToken ct) =>
+            Results.Ok(await service.Locate(ClientIpAddressResolver.Resolve(context), ct)))
+    .WithSummary("Estimate the user's location from their public IP")
+    .WithDescription(
+        "Returns an approximate city-level hint only. It is never a confirmed delivery address.")
+    .Produces<ApproximateIpLocation>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
 // Notifications shared by customers and runners.
 var notificationsApi=app.MapGroup("/api/v1/notifications").WithTags("Notifications").RequireAuthorization();
 notificationsApi.MapGet("/",async(bool? unreadOnly,int page,int pageSize,NotificationService service,CancellationToken ct)=>Results.Ok(await service.List(unreadOnly,page,pageSize,ct))).WithSummary("List notifications").Produces<PagedNotifications>();
@@ -795,15 +916,7 @@ var errands = app
 // Return the curated customer categories represented by the mobile UI.
 errands.MapGet(
         "/categories",
-        () => Results.Ok(
-            new[]
-            {
-                new ErrandCategoryDetails(ErrandCategory.Grocery, "Grocery Run", "Groceries and household items from a preferred store.", true, true, false),
-                new ErrandCategoryDetails(ErrandCategory.Laundry, "Laundry Pickup", "Wash-and-fold or dry-cleaning pickup and delivery.", true, true, false),
-                new ErrandCategoryDetails(ErrandCategory.Pharmacy, "Pharmacy", "Prescription or over-the-counter pharmacy collection.", true, true, true),
-                new ErrandCategoryDetails(ErrandCategory.DocumentCollection, "Document Collection", "Secure pickup and delivery of documents.", false, false, false),
-                new ErrandCategoryDetails(ErrandCategory.Custom, "Custom Errand", "A detailed customer-defined task or multi-stop route.", true, true, false)
-            }))
+        () => Results.Ok(ErrandCategoryCatalog.All))
     .WithTags("Customer errands")
     .WithSummary("List supported errand categories")
     .Produces<IReadOnlyList<ErrandCategoryDetails>>()
@@ -812,12 +925,52 @@ errands.MapGet(
 // List the signed-in customer's active errands, history, or both.
 errands.MapGet(
         "/",
-        async (bool? active, int page, int pageSize, ErrandService service, CancellationToken ct) =>
-            Results.Ok(await service.List(active, page, pageSize, ct)))
+        async (ErrandService service, CancellationToken ct, bool? active = null,
+            int? pageNumber = null, int? page = null, int pageSize = 20) =>
+            Results.Ok(await service.List(active, pageNumber ?? page ?? 1, pageSize, ct)))
     .WithTags("Customer errands")
     .WithSummary("List the customer's errands")
-    .WithDescription("Set active=true for current activity, false for history, or omit it for both.")
+    .WithDescription("Set active=true for current activity, false for history, or omit it for both. pageNumber defaults to 1 and pageSize defaults to 20; page remains accepted for older clients.")
     .Produces<PagedErrands>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/active",
+        async (ErrandService service, CancellationToken ct, int pageNumber = 1, int pageSize = 20) =>
+            Results.Ok(await service.List(true, pageNumber, pageSize, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("List the customer's active errands")
+    .WithDescription("Returns paid, matching, assigned, in-progress, and awaiting-confirmation errands owned by the signed-in customer.")
+    .Produces<PagedErrands>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/history",
+        async (ErrandService service, CancellationToken ct, int pageNumber = 1, int pageSize = 20) =>
+            Results.Ok(await service.List(false, pageNumber, pageSize, ct)))
+    .WithTags("Customer errands")
+    .WithSummary("List the customer's errand history")
+    .WithDescription("Returns completed, cancelled, and failed errands owned by the signed-in customer.")
+    .Produces<PagedErrands>()
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+// Privacy-safe global search: only the signed-in customer's data is searched.
+app.MapGet(
+        "/api/v1/search",
+        async (ErrandService errandService, UserPreferenceService preferenceService,
+            CancellationToken ct, string? query = null, int pageNumber = 1, int pageSize = 20) =>
+        {
+            var term = query?.Trim() ?? string.Empty;
+            var matchingErrands = await errandService.Search(term, pageNumber, pageSize, ct);
+            var matchingLocations = await preferenceService.Search(term, ct);
+            return Results.Ok(new GlobalSearchResults(term, matchingErrands,
+                matchingLocations, ErrandCategoryCatalog.Search(term)));
+        })
+    .WithTags("Global search")
+    .WithSummary("Search across the customer's ErrandRuns data")
+    .WithDescription("Searches the signed-in customer's errand titles, providers, instructions, stop addresses, item names, saved locations, and the public category catalog. It never exposes another customer's private data.")
+    .Produces<GlobalSearchResults>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
     .RequireAuthorization(policy => policy.RequireRole("Customer"));
 
 // Create a new errand.

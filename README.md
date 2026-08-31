@@ -29,9 +29,16 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | GET/POST | `/api/v1/users/me/locations` | Customer or Runner | Lists or creates saved home/work/favorite delivery locations. |
 | GET/PUT/DELETE | `/api/v1/users/me/locations/{id}` | Location owner | Reads, updates, or removes map and delivery preferences. |
 | POST | `/api/v1/users/me/locations/{id}/default` | Location owner | Makes a location the default home base. |
+| GET | `/api/v1/location-search/autocomplete` | Customer or Runner | Searches Nigerian Google places, biased toward Lagos. |
+| GET | `/api/v1/location-search/places/{placeId}` | Customer or Runner | Resolves the selected place to an address, coordinates, components, and viewport. |
+| GET | `/api/v1/location-search/reverse-geocode` | Customer or Runner | Resolves a map pin to the best deliverable street address. |
+| GET | `/api/v1/location-search/ip` | Customer or Runner | Returns an approximate city-level location hint from the public request IP. |
 | POST | `/api/v1/errands` | Customer | Creates a multi-stop errand. The request must contain two or more stops and at least one `Delivery` stop. |
 | GET | `/api/v1/errands/categories` | Customer | Returns the grocery, laundry, pharmacy, document, and custom UI categories. |
 | GET | `/api/v1/errands` | Customer | Returns paged active errands, history, or both for the signed-in customer. |
+| GET | `/api/v1/errands/active` | Customer | Returns the customer's paginated current errands. |
+| GET | `/api/v1/errands/history` | Customer | Returns the customer's paginated completed, cancelled, and failed errands. |
+| GET | `/api/v1/search` | Customer | Searches the customer's errands and saved locations plus the public category catalog. |
 | GET | `/api/v1/errands/{id}` | Customer owner | Returns route stops, requested items, instructions, and estimate details. |
 | GET | `/api/v1/errands/{id}/estimate` | Customer owner | Returns the server-calculated service fee and total estimate. |
 | GET | `/api/v1/errands/{id}/tracking` | Customer owner | Returns stop progress and the assigned runner ID. |
@@ -67,7 +74,7 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 
 Passwords require at least 8 characters, with uppercase, lowercase, and numeric characters. New runner accounts have an `Applicant` runner status and cannot be matched until the future verification workflow makes them available. Domain-rule failures return RFC 7807 Problem Details with `409`; missing resources return `404`; missing or insufficient credentials return `401` or `403`.
 
-Phone verification uses a six-digit, account-bound challenge. Codes expire after 10 minutes, resend is available after 60 seconds, and five incorrect attempts invalidate the challenge. Development responses contain `developmentCode` for Swagger testing; production sends the code through the configured Termii DND SMS route and never returns it. Saved locations store the map pin, address, landmark, gate/delivery instructions, favorite/default flags, and preferred errand categories. A user can store up to 20 locations and has at most one default home base.
+Phone verification uses a six-digit, account-bound challenge. Codes expire after 10 minutes, resend is available after 60 seconds, and five incorrect attempts invalidate the challenge. Development responses contain `developmentCode` for Swagger testing; production sends the code through the configured Termii DND SMS route and never returns it. Saved locations store the map pin, address, optional Google place metadata, landmark, gate/delivery instructions, favorite/default flags, and preferred errand categories. A user can store up to 20 locations and has at most one default home base.
 
 Runner earnings are credited only when the customer confirms a completed errand. The merchandise budget is excluded: the runner receives the configured `RunnerPayments:RunnerPercent` of the service fee (80% by default). Withdrawals include the configured fee (NGN 50 by default), require an `Idempotency-Key`, and store only Paystack's recipient token plus the account-number suffix. Signed Paystack webhooks mark transfers paid; failed or reversed transfers restore the ledger balance.
 

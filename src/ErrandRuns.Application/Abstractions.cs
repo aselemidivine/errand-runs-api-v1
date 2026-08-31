@@ -12,6 +12,8 @@ public interface IErrandRepository
     Task<Errand?> Find(Guid id, CancellationToken ct);
     Task<IReadOnlyList<Errand>> ListForUser(Guid userId, bool runner, bool? active, int skip, int take, CancellationToken ct);
     Task<int> CountForUser(Guid userId, bool runner, bool? active, CancellationToken ct);
+    Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct);
+    Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct);
     Task Save(CancellationToken ct);
 }
 public interface IRunnerRepository { Task<RunnerProfile?> Find(Guid id, CancellationToken ct); Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct); Task Save(CancellationToken ct); }
@@ -110,7 +112,7 @@ public sealed record ErrandItemDetails(Guid Id, string Name, int Quantity, strin
 public sealed record ErrandDetails(Guid Id, string Title, ErrandCategory Category, ErrandStatus Status, DateTimeOffset? ScheduledFor, DateTimeOffset CreatedAt, Guid? RunnerId, string? PreferredProvider, string? SpecialInstructions, MoneyDetails MerchandiseEstimate, MoneyDetails ServiceFee, MoneyDetails TotalEstimate, IReadOnlyList<ErrandStopDetails> Stops, IReadOnlyList<ErrandItemDetails> Items);
 public sealed record ErrandEstimate(Guid ErrandId, MoneyDetails Merchandise, MoneyDetails ServiceFee, MoneyDetails Total);
 public sealed record ErrandTracking(Guid ErrandId, ErrandStatus Status, int CompletedStops, int TotalStops, ErrandStopDetails? CurrentStop, Guid? RunnerId);
-public sealed record PagedErrands(IReadOnlyList<ErrandSummary> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+public sealed record PagedErrands(IReadOnlyList<ErrandSummary> Items, int PageNumber, int PageSize, int TotalCount, int TotalPages);
 public sealed record ErrandCategoryDetails(ErrandCategory Value, string Name, string Description, bool SupportsItems, bool SupportsPreferredProvider, bool SupportsPrescription);
 public sealed record SetRunnerAvailability(bool Available);
 public sealed record RunnerDashboard(RunnerStatus Status, bool IsAvailable, decimal Rating, int CompletedErrands, MoneyDetails AvailableBalance, int ActiveJobs);
@@ -163,6 +165,20 @@ public sealed class ErrandService(IErrandRepository errands, IRunnerRepository r
         var values = await errands.ListForUser(current.UserId, false, active, (page - 1) * pageSize, pageSize, ct);
         return new(values.Select(Map).ToList(), page, pageSize, total, total == 0 ? 0 : (int)Math.Ceiling(total / (double)pageSize));
     }
+    public async Task<PagedErrands> Search(string query, int pageNumber, int pageSize, CancellationToken ct)
+    {
+        EnsureCustomer();
+        query = query?.Trim() ?? string.Empty;
+        if (query.Length < 2) throw new ArgumentException("Search query must contain at least two characters.");
+        if (query.Length > 100) throw new ArgumentException("Search query cannot exceed 100 characters.");
+        pageNumber = Math.Max(pageNumber, 1);
+        pageSize = Math.Clamp(pageSize, 1, 100);
+        var total = await errands.CountSearchForCustomer(current.UserId, query, ct);
+        var values = await errands.SearchForCustomer(current.UserId, query,
+            (pageNumber - 1) * pageSize, pageSize, ct);
+        return new(values.Select(Map).ToList(), pageNumber, pageSize, total,
+            total == 0 ? 0 : (int)Math.Ceiling(total / (double)pageSize));
+    }
     public async Task<ErrandDetails> Get(Guid id, CancellationToken ct) => MapDetails(await Owned(id, false, ct));
     public async Task<ErrandEstimate> GetEstimate(Guid id, CancellationToken ct)
     {
@@ -180,7 +196,7 @@ public sealed class ErrandService(IErrandRepository errands, IRunnerRepository r
             if (runner?.Status == RunnerStatus.Busy) runner.ReleaseAssignment();
         }
         await errands.Save(ct);
-        if(runnerId is Guid cancelledRunner)await notifications.Publish(cancelledRunner,NotificationType.ErrandUpdate,"Errand cancelled",e.Title,e.Id,ct);
+        if (runnerId is Guid cancelledRunner) await notifications.Publish(cancelledRunner, NotificationType.ErrandUpdate, "Errand cancelled", e.Title, e.Id, ct);
         return Map(e);
     }
     public async Task<ErrandSummary> ConfirmCompletion(Guid id, CancellationToken ct)
@@ -194,7 +210,7 @@ public sealed class ErrandService(IErrandRepository errands, IRunnerRepository r
                 finance.AddLedgerEntry(new RunnerLedgerEntry(Guid.NewGuid(), runnerId, e.Id, null, RunnerLedgerEntryType.Earning, compensation.Calculate(e), $"Completed errand - {e.Title}", clock.UtcNow));
         }
         await errands.Save(ct);
-        if(e.RunnerId is Guid paidRunner)await notifications.Publish(paidRunner,NotificationType.Payment,"Earnings available",$"Your earnings for {e.Title} are now available.",e.Id,ct);
+        if (e.RunnerId is Guid paidRunner) await notifications.Publish(paidRunner, NotificationType.Payment, "Earnings available", $"Your earnings for {e.Title} are now available.", e.Id, ct);
         return Map(e);
     }
     public async Task<ErrandTracking> Track(Guid id, CancellationToken ct)
@@ -208,13 +224,13 @@ public sealed class ErrandService(IErrandRepository errands, IRunnerRepository r
     {
         var e = await Owned(id, false, ct); e.BeginMatching(); var runnerId = await matching.FindRunner(e, ct) ?? throw new DomainException("No eligible runner is currently available.");
         var runner = await runners.Find(runnerId, ct) ?? throw new DomainException("Matched runner was not found.");
-        runner.Assign(); e.AssignRunner(runnerId); await errands.Save(ct);await notifications.Publish(runnerId,NotificationType.NewAssignment,"New errand assignment",e.Title,e.Id,ct);return Map(e);
+        runner.Assign(); e.AssignRunner(runnerId); await errands.Save(ct); await notifications.Publish(runnerId, NotificationType.NewAssignment, "New errand assignment", e.Title, e.Id, ct); return Map(e);
     }
-    public async Task<ErrandSummary> Accept(Guid id, CancellationToken ct) { var e = await Owned(id, true, ct); e.Accept(current.UserId); await errands.Save(ct);await notifications.Publish(e.CustomerId,NotificationType.ErrandUpdate,"Runner accepted your errand",e.Title,e.Id,ct);return Map(e); }
+    public async Task<ErrandSummary> Accept(Guid id, CancellationToken ct) { var e = await Owned(id, true, ct); e.Accept(current.UserId); await errands.Save(ct); await notifications.Publish(e.CustomerId, NotificationType.ErrandUpdate, "Runner accepted your errand", e.Title, e.Id, ct); return Map(e); }
     public async Task<ErrandSummary> Decline(Guid id, CancellationToken ct) { var e = await Owned(id, true, ct); e.Decline(current.UserId); var runner = await runners.Find(current.UserId, ct) ?? throw new KeyNotFoundException("Runner not found."); runner.ReleaseAssignment(); await errands.Save(ct); return Map(e); }
-    public async Task<ErrandSummary> StartJourney(Guid id, CancellationToken ct) { var e = await Owned(id, true, ct); e.StartJourney(current.UserId); await errands.Save(ct);await notifications.Publish(e.CustomerId,NotificationType.ErrandUpdate,"Runner is on the way",e.Title,e.Id,ct);return Map(e); }
+    public async Task<ErrandSummary> StartJourney(Guid id, CancellationToken ct) { var e = await Owned(id, true, ct); e.StartJourney(current.UserId); await errands.Save(ct); await notifications.Publish(e.CustomerId, NotificationType.ErrandUpdate, "Runner is on the way", e.Title, e.Id, ct); return Map(e); }
     public async Task<ErrandSummary> StartStop(Guid id, Guid stopId, CancellationToken ct) { var e = await Owned(id, true, ct); e.StartStop(current.UserId, stopId); await errands.Save(ct); return Map(e); }
-    public async Task<ErrandSummary> CompleteStop(Guid id, Guid stopId, CancellationToken ct) { var e = await Owned(id, true, ct); e.CompleteStop(current.UserId, stopId, clock.UtcNow); await errands.Save(ct);await notifications.Publish(e.CustomerId,NotificationType.ErrandUpdate,"Errand stop completed",$"Progress: {e.Stops.Count(x=>x.Status==StopStatus.Completed)} of {e.Stops.Count} stops.",e.Id,ct);return Map(e); }
+    public async Task<ErrandSummary> CompleteStop(Guid id, Guid stopId, CancellationToken ct) { var e = await Owned(id, true, ct); e.CompleteStop(current.UserId, stopId, clock.UtcNow); await errands.Save(ct); await notifications.Publish(e.CustomerId, NotificationType.ErrandUpdate, "Errand stop completed", $"Progress: {e.Stops.Count(x => x.Status == StopStatus.Completed)} of {e.Stops.Count} stops.", e.Id, ct); return Map(e); }
     private async Task<Errand> Owned(Guid id, bool runner, CancellationToken ct) { var e = await errands.Find(id, ct) ?? throw new KeyNotFoundException("Errand not found."); var owner = runner ? e.RunnerId : e.CustomerId; if (owner != current.UserId) throw new UnauthorizedAccessException(); return e; }
     private void EnsureCustomer() { if (!current.IsInRole("Customer")) throw new UnauthorizedAccessException(); }
     private static MoneyDetails Money(decimal amount, string currency) => new(amount, currency);

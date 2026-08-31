@@ -13,8 +13,13 @@ services:
       Database__ApplyMigrations: "true"
       ConnectionStrings__SqlServer: Server=sql,1433;Database=ErrandRuns;User Id=sa;Password=${ERRANDRUNS_DB_PASSWORD};TrustServerCertificate=True
       Jwt__SigningKey: ${ERRANDRUNS_JWT_KEY}
-      ExternalServices__GoogleMaps__Enabled: ${GOOGLE_MAPS_ENABLED:-false}
-      ExternalServices__GoogleMaps__ApiKey: ${GOOGLE_MAPS_API_KEY:-}
+      GoogleMaps__Enabled: ${GOOGLE_MAPS_ENABLED:-false}
+      GoogleMaps__ServerApiKey: ${GOOGLE_MAPS_SERVER_API_KEY:-}
+      GoogleMaps__PlacesBaseUrl: ${GOOGLE_MAPS_PLACES_BASE_URL:-https://places.googleapis.com}
+      GoogleMaps__GeocodingBaseUrl: ${GOOGLE_MAPS_GEOCODING_BASE_URL:-https://geocode.googleapis.com}
+      IpGeolocation__Enabled: ${IP_GEOLOCATION_ENABLED:-false}
+      IpGeolocation__Provider: ${IP_GEOLOCATION_PROVIDER:-IpApiCo}
+      IpGeolocation__BaseUrl: ${IP_GEOLOCATION_BASE_URL:-https://ipapi.co}
       ExternalServices__Paystack__Enabled: ${PAYSTACK_ENABLED:-false}
       ExternalServices__Paystack__SecretKey: ${PAYSTACK_SECRET_KEY:-}
       ExternalServices__Paystack__PublicKey: ${PAYSTACK_PUBLIC_KEY:-}

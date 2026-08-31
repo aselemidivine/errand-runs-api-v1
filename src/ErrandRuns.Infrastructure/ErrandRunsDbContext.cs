@@ -27,7 +27,7 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<IdentityRoleClaim<Guid>>().ToTable("RoleClaims", "identity");
         b.Entity<IdentityUserToken<Guid>>().ToTable("UserTokens", "identity");
         b.Entity<PhoneVerificationChallenge>(e => { e.ToTable("PhoneVerificationChallenges", "identity"); e.HasKey(x => x.Id); e.Property(x => x.PhoneNumber).HasMaxLength(32); e.HasIndex(x => new { x.UserId, x.SentAt }); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
-        b.Entity<SavedLocation>(e => { e.ToTable("SavedLocations", "identity"); e.HasKey(x => x.Id); e.Property(x => x.Label).HasMaxLength(60); e.Property(x => x.Address).HasMaxLength(500); e.Property(x => x.Latitude).HasPrecision(9, 6); e.Property(x => x.Longitude).HasPrecision(9, 6); e.Property(x => x.Landmark).HasMaxLength(240); e.Property(x => x.DeliveryInstructions).HasMaxLength(1000); e.HasIndex(x => new { x.UserId, x.UpdatedAt }); e.HasIndex(x => new { x.UserId, x.IsDefault }).IsUnique().HasFilter("[IsDefault] = 1"); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); e.HasMany(x => x.PreferredCategories).WithOne().HasForeignKey(x => x.SavedLocationId).OnDelete(DeleteBehavior.Cascade); e.Navigation(x => x.PreferredCategories).UsePropertyAccessMode(PropertyAccessMode.Field); });
+        b.Entity<SavedLocation>(e => { e.ToTable("SavedLocations", "identity"); e.HasKey(x => x.Id); e.Property(x => x.Label).HasMaxLength(60); e.Property(x => x.Address).HasMaxLength(500); e.Property(x => x.Latitude).HasPrecision(9, 6); e.Property(x => x.Longitude).HasPrecision(9, 6); e.Property(x => x.Landmark).HasMaxLength(240); e.Property(x => x.DeliveryInstructions).HasMaxLength(1000); e.Property(x => x.GooglePlaceId).HasMaxLength(255); e.Property(x => x.AddressComponentsJson).HasMaxLength(16000); e.HasIndex(x => new { x.UserId, x.UpdatedAt }); e.HasIndex(x => new { x.UserId, x.IsDefault }).IsUnique().HasFilter("[IsDefault] = 1"); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); e.HasMany(x => x.PreferredCategories).WithOne().HasForeignKey(x => x.SavedLocationId).OnDelete(DeleteBehavior.Cascade); e.Navigation(x => x.PreferredCategories).UsePropertyAccessMode(PropertyAccessMode.Field); });
         b.Entity<SavedLocationCategory>(e => { e.ToTable("SavedLocationCategories", "identity"); e.HasKey(x => new { x.SavedLocationId, x.Category }); });
         b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
         b.Entity<RunnerProfile>(e => { e.ToTable("RunnerProfiles", "runners"); e.HasKey(x => x.UserId); e.Property(x => x.Rating).HasPrecision(3, 2); e.HasIndex(x => x.Status); e.HasOne<ApplicationUser>().WithOne().HasForeignKey<RunnerProfile>(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
@@ -44,8 +44,10 @@ public sealed class ErrandRepository(ErrandRunsDbContext db) : IErrandRepository
 {
     public async Task Add(Errand value, CancellationToken ct) => await db.Errands.AddAsync(value, ct);
     public Task<Errand?> Find(Guid id, CancellationToken ct) => db.Errands.Include(x => x.Stops).Include(x => x.Items).SingleOrDefaultAsync(x => x.Id == id, ct);
-    public async Task<IReadOnlyList<Errand>> ListForUser(Guid id, bool runner, bool? active, int skip, int take, CancellationToken ct) => await Filter(id, runner, active).AsNoTracking().OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
+    public async Task<IReadOnlyList<Errand>> ListForUser(Guid id, bool runner, bool? active, int skip, int take, CancellationToken ct) => await Filter(id, runner, active).AsNoTracking().Include(x => x.Stops).OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
     public Task<int> CountForUser(Guid id, bool runner, bool? active, CancellationToken ct) => Filter(id, runner, active).CountAsync(ct);
+    public async Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct) => await Search(customerId, query).AsNoTracking().Include(x => x.Stops).OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
+    public Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct) => Search(customerId, query).CountAsync(ct);
     public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
     private IQueryable<Errand> Filter(Guid id, bool runner, bool? active)
     {
@@ -53,6 +55,18 @@ public sealed class ErrandRepository(ErrandRunsDbContext db) : IErrandRepository
         if (active is true) query = query.Where(x => x.Status != ErrandStatus.Completed && x.Status != ErrandStatus.Cancelled && x.Status != ErrandStatus.Failed);
         if (active is false) query = query.Where(x => x.Status == ErrandStatus.Completed || x.Status == ErrandStatus.Cancelled || x.Status == ErrandStatus.Failed);
         return query;
+    }
+    private IQueryable<Errand> Search(Guid customerId, string query)
+    {
+        var normalized = query.ToLower();
+        return db.Errands.Where(x =>
+            x.CustomerId == customerId &&
+            (x.Title.ToLower().Contains(normalized) ||
+             (x.PreferredProvider != null && x.PreferredProvider.ToLower().Contains(normalized)) ||
+             (x.SpecialInstructions != null && x.SpecialInstructions.ToLower().Contains(normalized)) ||
+             x.Stops.Any(stop => stop.Address.ToLower().Contains(normalized) ||
+                 (stop.Instructions != null && stop.Instructions.ToLower().Contains(normalized))) ||
+             x.Items.Any(item => item.Name.ToLower().Contains(normalized))));
     }
 }
 public sealed class RunnerRepository(ErrandRunsDbContext db) : IRunnerRepository

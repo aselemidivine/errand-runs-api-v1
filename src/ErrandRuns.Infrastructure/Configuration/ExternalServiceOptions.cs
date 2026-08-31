@@ -2,10 +2,24 @@ namespace ErrandRuns.Infrastructure.Configuration;
 
 public sealed class GoogleMapsOptions
 {
-    public const string SectionName = "ExternalServices:GoogleMaps";
+    public const string SectionName = "GoogleMaps";
     public bool Enabled { get; init; }
-    public string ApiKey { get; init; } = string.Empty;
-    public string BaseUrl { get; init; } = "https://maps.googleapis.com";
+    public string ServerApiKey { get; init; } = string.Empty;
+    public string PlacesBaseUrl { get; init; } = "https://places.googleapis.com";
+    public string GeocodingBaseUrl { get; init; } = "https://geocode.googleapis.com";
+    public decimal LagosLatitude { get; init; } = 6.5244m;
+    public decimal LagosLongitude { get; init; } = 3.3792m;
+    public decimal LagosBiasRadiusMeters { get; init; } = 50000m;
+    public int TimeoutSeconds { get; init; } = 10;
+}
+
+public sealed class IpGeolocationOptions
+{
+    public const string SectionName = "IpGeolocation";
+    public bool Enabled { get; init; }
+    public string Provider { get; init; } = "IpApiCo";
+    public string BaseUrl { get; init; } = "https://ipapi.co";
+    public int TimeoutSeconds { get; init; } = 5;
 }
 
 public sealed class PaystackOptions

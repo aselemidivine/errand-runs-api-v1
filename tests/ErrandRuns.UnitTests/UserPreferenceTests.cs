@@ -23,6 +23,23 @@ public sealed class UserPreferenceTests
     }
 
     [Fact]
+    public void Saved_location_normalizes_google_metadata_and_rejects_invalid_json()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var location = new SavedLocation(Guid.NewGuid(), Guid.NewGuid(), " Home ",
+            " 1 Admiralty Way, Lagos ", 6.4474m, 3.4723m, null, null,
+            false, false, [], now, " google-place-1 ", " { \"city\": \"Lagos\" } ");
+
+        Assert.Equal("Home", location.Label);
+        Assert.Equal("1 Admiralty Way, Lagos", location.Address);
+        Assert.Equal("google-place-1", location.GooglePlaceId);
+        Assert.Equal("{\"city\":\"Lagos\"}", location.AddressComponentsJson);
+        Assert.Throws<DomainException>(() => new SavedLocation(Guid.NewGuid(), Guid.NewGuid(),
+            "Home", "Lagos", 6m, 3m, null, null, false, false, [], now,
+            "google-place-1", "not-json"));
+    }
+
+    [Fact]
     public async Task First_saved_location_becomes_default_and_a_new_default_replaces_it()
     {
         var userId = Guid.NewGuid();
