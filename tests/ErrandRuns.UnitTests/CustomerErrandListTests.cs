@@ -9,6 +9,26 @@ namespace ErrandRuns.UnitTests;
 public sealed class CustomerErrandListTests
 {
     [Fact]
+    public async Task Create_accepts_a_single_stop_grocery_errand_without_delivery()
+    {
+        var repository = new QueryRepository(NewErrand());
+        var service = Create(repository);
+
+        var result = await service.Create(new CreateErrand(
+            "Weekly grocery run",
+            ErrandCategory.Grocery,
+            null,
+            [new CreateStop(1, StopType.Shopping, "Lekki market", 6.45m, 3.47m, "Buy listed items")],
+            Items: [new CreateErrandItem("Milk", 1)]), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ErrandStatus.PendingPayment, result.Status);
+        Assert.Equal(1, result.StopCount);
+        Assert.NotNull(repository.Added);
+        Assert.Single(repository.Added.Stops);
+        Assert.DoesNotContain(repository.Added.Stops, stop => stop.Type == StopType.Delivery);
+    }
+
+    [Fact]
     public async Task List_normalizes_page_number_and_page_size()
     {
         var repository = new QueryRepository(NewErrand());
@@ -50,10 +70,11 @@ public sealed class CustomerErrandListTests
 
     private sealed class QueryRepository(Errand errand) : IErrandRepository
     {
+        public Errand? Added { get; private set; }
         public int LastSkip { get; private set; }
         public int LastTake { get; private set; }
         public string? LastSearch { get; private set; }
-        public Task Add(Errand value, CancellationToken ct) => Task.CompletedTask;
+        public Task Add(Errand value, CancellationToken ct) { Added = value; return Task.CompletedTask; }
         public Task<Errand?> Find(Guid id, CancellationToken ct) => Task.FromResult<Errand?>(errand);
         public Task<IReadOnlyList<Errand>> ListForUser(Guid userId, bool runner, bool? active, int skip, int take, CancellationToken ct) { LastSkip = skip; LastTake = take; return Task.FromResult<IReadOnlyList<Errand>>([errand]); }
         public Task<int> CountForUser(Guid userId, bool runner, bool? active, CancellationToken ct) => Task.FromResult(1);

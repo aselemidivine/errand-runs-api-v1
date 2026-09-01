@@ -229,10 +229,10 @@ public sealed class Errand
 
     public void RequestEstimate()
     {
-        if (_stops.Count < 2 || _stops.All(x => x.Type != StopType.Delivery))
+        if (_stops.Count == 0)
         {
             throw new DomainException(
-                "An errand requires at least two stops and a delivery stop.");
+                "An errand requires at least one stop.");
         }
 
         Transition(ErrandStatus.PendingEstimate);

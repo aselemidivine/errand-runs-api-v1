@@ -130,7 +130,7 @@ public sealed record EarningsDashboard(MoneyDetails AvailableBalance, IReadOnlyL
 public sealed class PricingService : IPricingService
 {
     private const decimal BaseFee = 2500m, AdditionalStopFee = 750m;
-    public Money Estimate(int stopCount, decimal discount) { if (stopCount < 2) throw new DomainException("At least two stops are required."); var subtotal = BaseFee + (stopCount - 2) * AdditionalStopFee; return new(subtotal * (1 - Math.Clamp(discount, 0, 100) / 100)); }
+    public Money Estimate(int stopCount, decimal discount) { if (stopCount < 1) throw new DomainException("At least one stop is required."); var subtotal = BaseFee + Math.Max(0, stopCount - 2) * AdditionalStopFee; return new(subtotal * (1 - Math.Clamp(discount, 0, 100) / 100)); }
 }
 public sealed class RunnerMatchingService(IRunnerRepository runners) : IRunnerMatchingService
 {

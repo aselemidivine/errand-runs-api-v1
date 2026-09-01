@@ -986,8 +986,8 @@ errands.MapPost(
     .WithTags("Errands")
     .WithSummary("Create an errand")
     .WithDescription(
-        "Creates a customer-owned multi-stop errand. Supply at least " +
-        "two stops, including one delivery stop.")
+        "Creates a customer-owned errand with one or more ordered stops. " +
+        "Single-location errands do not require a Delivery stop; add more stops only when the task uses additional locations.")
     .Produces<ErrandSummary>(StatusCodes.Status201Created)
     .ProducesProblem(StatusCodes.Status400BadRequest)
     .ProducesProblem(StatusCodes.Status401Unauthorized)

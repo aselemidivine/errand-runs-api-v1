@@ -12,5 +12,5 @@ Synchronous domain changes commit transactionally. Notifications and provider ca
 
 - No visual design assets were attached, so screen coverage derives from the supplied screen names and narrative.
 - Currency defaults to NGN at the boundary but remains a value on every `Money` instance.
-- A route requires at least two stops and a final delivery; plan limits belong in policy, not the aggregate.
+- An errand requires at least one actionable stop. Single-location errands do not require a delivery stop; multi-location errands retain unique ordered stop sequences.
 - Matching currently ranks eligible runners by rating and completed work; distance/service-zone filtering is an extension point.

@@ -33,7 +33,7 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | GET | `/api/v1/location-search/places/{placeId}` | Customer or Runner | Resolves the selected place to an address, coordinates, components, and viewport. |
 | GET | `/api/v1/location-search/reverse-geocode` | Customer or Runner | Resolves a map pin to the best deliverable street address. |
 | GET | `/api/v1/location-search/ip` | Customer or Runner | Returns an approximate city-level location hint from the public request IP. |
-| POST | `/api/v1/errands` | Customer | Creates a multi-stop errand. The request must contain two or more stops and at least one `Delivery` stop. |
+| POST | `/api/v1/errands` | Customer | Creates an errand with one or more ordered stops. A single-location errand does not require a `Delivery` stop. |
 | GET | `/api/v1/errands/categories` | Customer | Returns the grocery, laundry, pharmacy, document, and custom UI categories. |
 | GET | `/api/v1/errands` | Customer | Returns paged active errands, history, or both for the signed-in customer. |
 | GET | `/api/v1/errands/active` | Customer | Returns the customer's paginated current errands. |
