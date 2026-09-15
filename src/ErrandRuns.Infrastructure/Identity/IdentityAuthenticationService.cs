@@ -60,7 +60,15 @@ public sealed class IdentityAuthenticationService(
         return user is null ? null : await ToAccount(user, ct);
     }
 
-    public async Task<AuthenticationResult> UpdateAccount(Guid userId, UpdateAccount request, CancellationToken ct)
+    public Task<AuthenticationResult> UpdateAccount(
+        Guid userId, UpdateAccount request, CancellationToken ct) =>
+        UpdateAccountProfile(userId, request, null, ct);
+
+    public async Task<AuthenticationResult> UpdateAccountProfile(
+        Guid userId,
+        UpdateAccount request,
+        ProfilePictureUpload? profilePicture,
+        CancellationToken ct)
     {
         var user = await users.FindByIdAsync(userId.ToString());
         if (user is null) return AuthenticationResult.Failure("Account was not found.");
@@ -78,7 +86,41 @@ public sealed class IdentityAuthenticationService(
         var phoneChanged = !string.Equals(user.PhoneNumber, phone, StringComparison.Ordinal);
         user.UpdateProfile(request.DisplayName, phone, request.Bio);
         if (phoneChanged) user.PhoneNumberConfirmed = false;
+        if (profilePicture is not null)
+            user.SetProfilePicture(profilePicture.Data, profilePicture.ContentType, clock.UtcNow);
 
+        var result = await users.UpdateAsync(user);
+        return result.Succeeded
+            ? AuthenticationResult.Success(await ToAccount(user, ct))
+            : Failure(result);
+    }
+
+    public async Task<ProfilePictureContent?> GetProfilePicture(Guid userId, CancellationToken ct)
+    {
+        var value = await users.Users.AsNoTracking()
+            .Where(user => user.Id == userId && user.ProfilePictureData != null)
+            .Select(user => new
+            {
+                user.ProfilePictureData,
+                user.ProfilePictureContentType,
+                user.ProfilePictureUpdatedAt
+            })
+            .SingleOrDefaultAsync(ct);
+        return value?.ProfilePictureData is null
+            || value.ProfilePictureContentType is null
+            || value.ProfilePictureUpdatedAt is null
+                ? null
+                : new ProfilePictureContent(
+                    value.ProfilePictureData,
+                    value.ProfilePictureContentType,
+                    value.ProfilePictureUpdatedAt.Value);
+    }
+
+    public async Task<AuthenticationResult> RemoveProfilePicture(Guid userId, CancellationToken ct)
+    {
+        var user = await users.FindByIdAsync(userId.ToString());
+        if (user is null) return AuthenticationResult.Failure("Account was not found.");
+        user.RemoveProfilePicture();
         var result = await users.UpdateAsync(user);
         return result.Succeeded
             ? AuthenticationResult.Success(await ToAccount(user, ct))
@@ -239,7 +281,11 @@ public sealed class IdentityAuthenticationService(
             user.PhoneNumberConfirmed,
             user.Bio,
             role,
-            runnerStatus);
+            runnerStatus,
+            user.ProfilePictureData is null
+                ? null
+                : $"/api/v1/users/{user.Id:D}/profile-picture",
+            user.ProfilePictureUpdatedAt);
     }
 
     private static AuthenticationResult Failure(IdentityResult result) =>

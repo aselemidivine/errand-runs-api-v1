@@ -30,6 +30,7 @@ public sealed class PaystackOptions
     public string PublicKey { get; init; } = string.Empty;
     public string WebhookSecret { get; init; } = string.Empty;
     public string BaseUrl { get; init; } = "https://api.paystack.co";
+    public string CallbackUrl { get; init; } = string.Empty;
 }
 
 public sealed class SendGridOptions

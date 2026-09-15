@@ -17,5 +17,6 @@
     <ProjectReference Include="../../src/ErrandRuns.Domain/ErrandRuns.Domain.csproj" />
     <ProjectReference Include="../../src/ErrandRuns.Application/ErrandRuns.Application.csproj" />
     <ProjectReference Include="../../src/ErrandRuns.Infrastructure/ErrandRuns.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/ErrandRuns.Api/ErrandRuns.Api.csproj" />
   </ItemGroup>
 </Project>

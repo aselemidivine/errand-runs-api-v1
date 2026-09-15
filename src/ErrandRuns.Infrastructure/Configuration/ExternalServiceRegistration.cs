@@ -27,8 +27,11 @@ public static class ExternalServiceRegistration
                 && x.TimeoutSeconds is > 0 and <= 30),
             "A supported IP-geolocation provider, valid URL, and a 1-30 second timeout are required when enabled.");
         Bind<PaystackOptions>(services, configuration, PaystackOptions.SectionName,
-            x => !x.Enabled || (HasValue(x.SecretKey) && HasValue(x.WebhookSecret)),
-            "Paystack secret and webhook keys are required when enabled.");
+            x => !x.Enabled || (HasValue(x.SecretKey)
+                && Uri.TryCreate(x.BaseUrl, UriKind.Absolute, out _)
+                && (string.IsNullOrWhiteSpace(x.CallbackUrl)
+                    || Uri.TryCreate(x.CallbackUrl, UriKind.Absolute, out _))),
+            "A Paystack secret key, valid base URL, and optional valid callback URL are required when enabled.");
         Bind<SendGridOptions>(services, configuration, SendGridOptions.SectionName,
             x => !x.Enabled || (HasValue(x.ApiKey) && HasValue(x.FromEmail)),
             "SendGrid API key and sender email are required when enabled.");

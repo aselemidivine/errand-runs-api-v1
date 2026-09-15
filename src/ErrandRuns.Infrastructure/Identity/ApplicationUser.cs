@@ -22,11 +22,32 @@ public sealed class ApplicationUser : IdentityUser<Guid>
 
     public string DisplayName { get; private set; }
     public string? Bio { get; private set; }
+    public byte[]? ProfilePictureData { get; private set; }
+    public string? ProfilePictureContentType { get; private set; }
+    public DateTimeOffset? ProfilePictureUpdatedAt { get; private set; }
 
     public void UpdateProfile(string displayName, string? phoneNumber, string? bio)
     {
         DisplayName = displayName.Trim();
         PhoneNumber = string.IsNullOrWhiteSpace(phoneNumber) ? null : phoneNumber.Trim();
         Bio = string.IsNullOrWhiteSpace(bio) ? null : bio.Trim();
+    }
+
+    public void SetProfilePicture(byte[] data, string contentType, DateTimeOffset now)
+    {
+        if (data.Length is < 8 or > 5 * 1024 * 1024)
+            throw new ArgumentException("Profile picture must be between 8 bytes and 5 MB.");
+        if (contentType is not ("image/jpeg" or "image/png" or "image/webp"))
+            throw new ArgumentException("Profile picture must be JPEG, PNG, or WebP.");
+        ProfilePictureData = data;
+        ProfilePictureContentType = contentType;
+        ProfilePictureUpdatedAt = now;
+    }
+
+    public void RemoveProfilePicture()
+    {
+        ProfilePictureData = null;
+        ProfilePictureContentType = null;
+        ProfilePictureUpdatedAt = null;
     }
 }

@@ -3,6 +3,7 @@ obj/
 .vs/
 .idea/
 .env
-.env.example
+.env.*
+!.env.example
 TestResults/
 *.user

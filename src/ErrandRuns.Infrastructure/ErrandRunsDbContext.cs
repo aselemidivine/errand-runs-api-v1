@@ -19,7 +19,7 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.HasDefaultSchema("app");
         // Keep identity data separate from operational errand data. This also
         // makes retention and access policies easier to apply independently.
-        b.Entity<ApplicationUser>(e => { e.ToTable("Users", "identity"); e.Property(x => x.DisplayName).HasMaxLength(120); e.Property(x => x.PhoneNumber).HasMaxLength(32); e.Property(x => x.Bio).HasMaxLength(300); e.HasIndex(x => x.PhoneNumber).IsUnique().HasFilter("[PhoneNumber] IS NOT NULL"); });
+        b.Entity<ApplicationUser>(e => { e.ToTable("Users", "identity"); e.Property(x => x.DisplayName).HasMaxLength(120); e.Property(x => x.PhoneNumber).HasMaxLength(32); e.Property(x => x.Bio).HasMaxLength(300); e.Property(x => x.ProfilePictureContentType).HasMaxLength(32); e.HasIndex(x => x.PhoneNumber).IsUnique().HasFilter("[PhoneNumber] IS NOT NULL"); });
         b.Entity<IdentityRole<Guid>>().ToTable("Roles", "identity");
         b.Entity<IdentityUserRole<Guid>>().ToTable("UserRoles", "identity");
         b.Entity<IdentityUserClaim<Guid>>().ToTable("UserClaims", "identity");
@@ -31,7 +31,7 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<SavedLocationCategory>(e => { e.ToTable("SavedLocationCategories", "identity"); e.HasKey(x => new { x.SavedLocationId, x.Category }); });
         b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
         b.Entity<RunnerProfile>(e => { e.ToTable("RunnerProfiles", "runners"); e.HasKey(x => x.UserId); e.Property(x => x.Rating).HasPrecision(3, 2); e.HasIndex(x => x.Status); e.HasOne<ApplicationUser>().WithOne().HasForeignKey<RunnerProfile>(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
-        b.Entity<Payment>(e => { e.ToTable("Payments", "payments"); e.HasKey(x => x.Id); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => x.IdempotencyKey).IsUnique(); e.HasIndex(x => x.ProviderReference).IsUnique().HasFilter("[ProviderReference] <> ''"); e.ComplexProperty(x => x.Amount, m => { m.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2); m.Property(x => x.Currency).HasColumnName("Currency").HasMaxLength(3); }); });
+        b.Entity<Payment>(e => { e.ToTable("Payments", "payments"); e.HasKey(x => x.Id); e.Property(x => x.RowVersion).IsRowVersion(); e.Property(x => x.IdempotencyKey).HasMaxLength(120); e.Property(x => x.ProviderReference).HasMaxLength(160); e.Property(x => x.Provider).HasMaxLength(40); e.Property(x => x.PaymentMethod).HasMaxLength(40); e.Property(x => x.CheckoutUrl).HasMaxLength(2048); e.Property(x => x.AccessCode).HasMaxLength(160); e.HasIndex(x => x.IdempotencyKey).IsUnique(); e.HasIndex(x => x.ErrandId); e.HasIndex(x => x.ProviderReference).IsUnique().HasFilter("[ProviderReference] <> ''"); e.ComplexProperty(x => x.Amount, m => { m.Property(x => x.Amount).HasColumnName("Amount").HasPrecision(18, 2); m.Property(x => x.Currency).HasColumnName("Currency").HasMaxLength(3); }); });
         b.Entity<RunnerLedgerEntry>(e => { e.ToTable("RunnerLedger", "payments"); e.HasKey(x => x.Id); e.Property(x => x.Amount).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Property(x => x.Description).HasMaxLength(240); e.HasIndex(x => x.RunnerId); e.HasIndex(x => x.ErrandId).IsUnique().HasFilter("[ErrandId] IS NOT NULL"); e.HasIndex(x => new { x.PayoutId, x.Type }).IsUnique().HasFilter("[PayoutId] IS NOT NULL"); });
         b.Entity<RunnerPayoutAccount>(e => { e.ToTable("RunnerPayoutAccounts", "payments"); e.HasKey(x => x.RunnerId); e.Property(x => x.BankCode).HasMaxLength(20); e.Property(x => x.BankName).HasMaxLength(120); e.Property(x => x.AccountName).HasMaxLength(160); e.Property(x => x.AccountNumberLast4).HasMaxLength(4); e.Property(x => x.RecipientCode).HasMaxLength(120); });
         b.Entity<RunnerPayout>(e => { e.ToTable("RunnerPayouts", "payments"); e.HasKey(x => x.Id); e.Property(x => x.Amount).HasPrecision(18, 2); e.Property(x => x.Fee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Property(x => x.IdempotencyKey).HasMaxLength(120); e.Property(x => x.ProviderReference).HasMaxLength(160); e.Property(x => x.FailureReason).HasMaxLength(500); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.RunnerId, x.IdempotencyKey }).IsUnique(); e.HasIndex(x => x.ProviderReference).IsUnique().HasFilter("[ProviderReference] <> ''"); });
@@ -48,6 +48,7 @@ public sealed class ErrandRepository(ErrandRunsDbContext db) : IErrandRepository
     public Task<int> CountForUser(Guid id, bool runner, bool? active, CancellationToken ct) => Filter(id, runner, active).CountAsync(ct);
     public async Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct) => await Search(customerId, query).AsNoTracking().Include(x => x.Stops).OrderByDescending(x => x.CreatedAt).Skip(skip).Take(Math.Min(take, 100)).ToListAsync(ct);
     public Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct) => Search(customerId, query).CountAsync(ct);
+    public void Remove(Errand value) => db.Errands.Remove(value);
     public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
     private IQueryable<Errand> Filter(Guid id, bool runner, bool? active)
     {
@@ -73,6 +74,24 @@ public sealed class RunnerRepository(ErrandRunsDbContext db) : IRunnerRepository
 {
     public Task<RunnerProfile?> Find(Guid id, CancellationToken ct) => db.Runners.SingleOrDefaultAsync(x => x.UserId == id, ct);
     public async Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct) => await db.Runners.AsNoTracking().Where(x => x.Status == RunnerStatus.Available).Take(50).ToListAsync(ct);
+    public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
+}
+public sealed class PaymentRepository(ErrandRunsDbContext db) : IPaymentRepository
+{
+    public Task<Payment?> Find(Guid paymentId, CancellationToken ct) =>
+        db.Payments.SingleOrDefaultAsync(x => x.Id == paymentId, ct);
+    public Task<Payment?> FindByReference(string providerReference, CancellationToken ct) =>
+        db.Payments.SingleOrDefaultAsync(x => x.ProviderReference == providerReference, ct);
+    public Task<Payment?> FindByIdempotencyKey(string idempotencyKey, CancellationToken ct) =>
+        db.Payments.SingleOrDefaultAsync(x => x.IdempotencyKey == idempotencyKey, ct);
+    public Task<Payment?> FindCurrentForErrand(Guid errandId, CancellationToken ct) =>
+        db.Payments.OrderByDescending(x => x.CreatedAt).FirstOrDefaultAsync(
+            x => x.ErrandId == errandId &&
+                (x.Status == PaymentStatus.Pending ||
+                 x.Status == PaymentStatus.Authorized ||
+                 x.Status == PaymentStatus.Confirmed), ct);
+    public async Task Add(Payment payment, CancellationToken ct) =>
+        await db.Payments.AddAsync(payment, ct);
     public Task Save(CancellationToken ct) => db.SaveChangesAsync(ct);
 }
 public sealed class RunnerFinanceRepository(ErrandRunsDbContext db) : IRunnerFinanceRepository

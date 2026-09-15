@@ -105,5 +105,56 @@ public sealed class LocationSearchApiTests : IClassFixture<WebApplicationFactory
         Assert.DoesNotContain("at least two stops", responseBody, StringComparison.OrdinalIgnoreCase);
         using var errand = JsonDocument.Parse(responseBody);
         Assert.Equal(1, errand.RootElement.GetProperty("stopCount").GetInt32());
+        var errandId = errand.RootElement.GetProperty("id").GetGuid();
+
+        using var deleteRequest = new HttpRequestMessage(
+            HttpMethod.Delete, $"/api/v1/errands/{errandId}");
+        deleteRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var deleteResponse = await client.SendAsync(
+            deleteRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Customer_can_update_and_download_a_valid_profile_picture()
+    {
+        var email = $"profile-{Guid.NewGuid():N}@example.com";
+        using var registration = await client.PostAsJsonAsync(
+            "/api/v1/auth/customers/register",
+            new { displayName = "Profile Customer", email, password = "ValidPass123" },
+            TestContext.Current.CancellationToken);
+        registration.EnsureSuccessStatusCode();
+        using var authentication = JsonDocument.Parse(
+            await registration.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var accessToken = authentication.RootElement.GetProperty("accessToken").GetString();
+
+        var png = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        using var multipart = new MultipartFormDataContent();
+        multipart.Add(new StringContent("Updated Customer"), "displayName");
+        multipart.Add(new StringContent("Testing my profile"), "bio");
+        var image = new ByteArrayContent(png);
+        image.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+        multipart.Add(image, "profilePicture", "avatar.png");
+        using var updateRequest = new HttpRequestMessage(
+            HttpMethod.Put, "/api/v1/auth/me/profile") { Content = multipart };
+        updateRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var updateResponse = await client.SendAsync(
+            updateRequest, TestContext.Current.CancellationToken);
+        var updateBody = await updateResponse.Content.ReadAsStringAsync(
+            TestContext.Current.CancellationToken);
+        Assert.True(updateResponse.IsSuccessStatusCode, updateBody);
+        using var updated = JsonDocument.Parse(updateBody);
+        var pictureUrl = updated.RootElement.GetProperty("profilePictureUrl").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(pictureUrl));
+
+        using var pictureRequest = new HttpRequestMessage(HttpMethod.Get, pictureUrl);
+        pictureRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        using var pictureResponse = await client.SendAsync(
+            pictureRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, pictureResponse.StatusCode);
+        Assert.Equal("image/png", pictureResponse.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(png, await pictureResponse.Content.ReadAsByteArrayAsync(
+            TestContext.Current.CancellationToken));
     }
 }

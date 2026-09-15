@@ -18,6 +18,7 @@ using ErrandRuns.Infrastructure.Payments;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +29,7 @@ using Serilog;
 
 // Create the application builder and configure Serilog for structured logging.
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.LoadLocalDotEnv(builder.Environment.ContentRootPath);
 
 builder.Host.UseSerilog(
     (context, logger) =>
@@ -92,12 +94,14 @@ builder.Services
 builder.Services.AddScoped<IErrandRepository, ErrandRepository>();
 builder.Services.AddScoped<IRunnerRepository, RunnerRepository>();
 builder.Services.AddScoped<IRunnerFinanceRepository, RunnerFinanceRepository>();
+builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IUserPreferenceRepository, UserPreferenceRepository>();
 builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 builder.Services.AddScoped<ErrandService>();
 builder.Services.AddScoped<RunnerService>();
 builder.Services.AddScoped<RunnerFinanceService>();
+builder.Services.AddScoped<CustomerPaymentService>();
 builder.Services.AddScoped<NotificationService>();
 builder.Services.AddScoped<INotificationPublisher>(provider=>provider.GetRequiredService<NotificationService>());
 builder.Services.AddScoped<MessagingService>();
@@ -111,9 +115,21 @@ builder.Services.AddSingleton(new RunnerCompensationPolicy(
     builder.Configuration.GetValue<decimal?>("RunnerPayments:PayoutFee") ?? 50m));
 
 var paystackEnabled = builder.Configuration.GetValue<bool>("ExternalServices:Paystack:Enabled");
-if (paystackEnabled) builder.Services.AddScoped<IPayoutGateway, PaystackPayoutGateway>();
-else if (builder.Environment.IsDevelopment()) builder.Services.AddScoped<IPayoutGateway, DevelopmentPayoutGateway>();
-else builder.Services.AddScoped<IPayoutGateway, UnavailablePayoutGateway>();
+if (paystackEnabled)
+{
+    builder.Services.AddScoped<IPaymentGateway, PaystackPaymentGateway>();
+    builder.Services.AddScoped<IPayoutGateway, PaystackPayoutGateway>();
+}
+else if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddScoped<IPaymentGateway, DevelopmentPaymentGateway>();
+    builder.Services.AddScoped<IPayoutGateway, DevelopmentPayoutGateway>();
+}
+else
+{
+    builder.Services.AddScoped<IPaymentGateway, UnavailablePaymentGateway>();
+    builder.Services.AddScoped<IPayoutGateway, UnavailablePayoutGateway>();
+}
 
 var termiiEnabled = builder.Configuration.GetValue<bool>("ExternalServices:Termii:Enabled");
 if (termiiEnabled) builder.Services.AddScoped<IPhoneOtpSender, TermiiPhoneOtpSender>();
@@ -172,6 +188,8 @@ builder.Services
 builder.Services.AddAuthorization();
 builder.Services.AddProblemDetails();
 builder.Services.AddSignalR();
+builder.Services.Configure<FormOptions>(options =>
+    options.MultipartBodyLengthLimit = ProfilePictureValidator.MaximumFileBytes + 64 * 1024);
 
 // Register OpenAPI and Swagger services.
 builder.Services.AddOpenApi();
@@ -426,9 +444,12 @@ app.MapPost("/api/v1/payments/webhooks/paystack", async (
         HttpRequest request,
         IConfiguration configuration,
         RunnerFinanceService finance,
+        CustomerPaymentService customerPayments,
         CancellationToken ct) =>
     {
-        var secret = configuration["ExternalServices:Paystack:WebhookSecret"];
+        var secret = configuration["ExternalServices:Paystack:SecretKey"];
+        if (string.IsNullOrWhiteSpace(secret))
+            secret = configuration["ExternalServices:Paystack:WebhookSecret"];
         var signature = request.Headers["x-paystack-signature"].ToString();
         if (string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(signature))
             return Results.Unauthorized();
@@ -441,11 +462,14 @@ app.MapPost("/api/v1/payments/webhooks/paystack", async (
         if (!CryptographicOperations.FixedTimeEquals(expected, supplied)) return Results.Unauthorized();
         using var document = JsonDocument.Parse(body);
         var eventName = document.RootElement.GetProperty("event").GetString();
-        if (eventName is not ("transfer.success" or "transfer.failed" or "transfer.reversed"))
-            return Results.Ok();
         var reference = document.RootElement.GetProperty("data").GetProperty("reference").GetString();
         if (!string.IsNullOrWhiteSpace(reference))
-            await finance.ReconcilePayout(reference, eventName[9..], ct);
+        {
+            if (eventName == "charge.success")
+                await customerPayments.ReconcileSuccessfulCharge(reference, ct);
+            else if (eventName is "transfer.success" or "transfer.failed" or "transfer.reversed")
+                await finance.ReconcilePayout(reference, eventName[9..], ct);
+        }
         return Results.Ok();
     })
     .WithTags("Payments")
@@ -583,6 +607,72 @@ auth.MapPut(
     .Produces<AccountDetails>()
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .RequireAuthorization();
+
+auth.MapPut(
+        "/me/profile",
+        async (
+            HttpRequest httpRequest,
+            ICurrentUser current,
+            IAuthenticationService accounts,
+            CancellationToken ct) =>
+        {
+            if (!httpRequest.HasFormContentType)
+                throw new BadHttpRequestException("Profile updates with a picture require multipart/form-data.");
+
+            var form = await httpRequest.ReadFormAsync(ct);
+            var file = form.Files.GetFile("profilePicture")
+                ?? throw new ArgumentException("A profilePicture file is required.");
+            var picture = await ProfilePictureValidator.Read(file, ct);
+            var phoneNumber = form["phoneNumber"].ToString();
+            var bio = form["bio"].ToString();
+            var request = new UpdateAccount(
+                form["displayName"].ToString(),
+                string.IsNullOrWhiteSpace(phoneNumber) ? null : phoneNumber,
+                string.IsNullOrWhiteSpace(bio) ? null : bio);
+            var result = await accounts.UpdateAccountProfile(
+                current.UserId, request, picture, ct);
+            return result.Succeeded
+                ? Results.Ok(result.Account)
+                : Results.ValidationProblem(result.Errors);
+        })
+    .WithSummary("Update profile details and profile picture")
+    .WithDescription(
+        "Accepts multipart/form-data fields displayName, optional phoneNumber and bio, and a required " +
+        "profilePicture JPEG, PNG, or WebP file up to 5 MB. The file signature is validated.")
+    .Accepts<UpdateProfileForm>("multipart/form-data")
+    .Produces<AccountDetails>()
+    .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .RequireAuthorization();
+
+auth.MapDelete(
+        "/me/profile-picture",
+        async (ICurrentUser current, IAuthenticationService accounts, CancellationToken ct) =>
+        {
+            var result = await accounts.RemoveProfilePicture(current.UserId, ct);
+            return result.Succeeded
+                ? Results.Ok(result.Account)
+                : Results.ValidationProblem(result.Errors);
+        })
+    .WithSummary("Remove the signed-in user's profile picture")
+    .Produces<AccountDetails>()
+    .RequireAuthorization();
+
+app.MapGet(
+        "/api/v1/users/{userId:guid}/profile-picture",
+        async (Guid userId, HttpContext context, IAuthenticationService accounts, CancellationToken ct) =>
+        {
+            var picture = await accounts.GetProfilePicture(userId, ct);
+            if (picture is null) return Results.NotFound();
+            context.Response.Headers.CacheControl = "private, max-age=300";
+            context.Response.Headers.LastModified = picture.UpdatedAt.ToString("R");
+            return Results.File(picture.Data, picture.ContentType);
+        })
+    .WithTags("Identity")
+    .WithSummary("Get an authenticated user's profile picture")
+    .Produces(StatusCodes.Status200OK)
+    .ProducesProblem(StatusCodes.Status404NotFound)
     .RequireAuthorization();
 
 // Allow the authenticated user to change their password.
@@ -940,7 +1030,7 @@ errands.MapGet(
             Results.Ok(await service.List(true, pageNumber, pageSize, ct)))
     .WithTags("Customer errands")
     .WithSummary("List the customer's active errands")
-    .WithDescription("Returns paid, matching, assigned, in-progress, and awaiting-confirmation errands owned by the signed-in customer.")
+    .WithDescription("Returns unpaid, matching, assigned, in-progress, and awaiting-confirmation errands owned by the signed-in customer. Unpaid entries may be permanently deleted.")
     .Produces<PagedErrands>()
     .RequireAuthorization(policy => policy.RequireRole("Customer"));
 
@@ -1016,6 +1106,70 @@ errands.MapGet(
     .Produces<ErrandEstimate>()
     .RequireAuthorization(policy => policy.RequireRole("Customer"));
 
+// Initialize and verify customer checkout through Paystack (or the
+// Development-only simulated gateway when Paystack is disabled).
+errands.MapPost(
+        "/{id:guid}/payments",
+        async (Guid id, InitializeErrandPayment request, HttpContext context,
+            CustomerPaymentService service, CancellationToken ct) =>
+        {
+            var payment = await service.Initialize(
+                id,
+                request,
+                context.Request.Headers["Idempotency-Key"].ToString(),
+                ct);
+            return Results.Created(
+                $"/api/v1/errands/{id}/payments/{payment.Id}",
+                payment);
+        })
+    .WithTags("Customer payments")
+    .WithSummary("Initialize payment for an errand")
+    .WithDescription(
+        "Requires an Idempotency-Key header. Returns Paystack's hosted authorization URL for card, " +
+        "bank_transfer, or ussd. In Development with Paystack disabled, returns developmentMode=true " +
+        "and the verify endpoint safely simulates success.")
+    .Produces<ErrandPaymentDetails>(StatusCodes.Status201Created)
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
+    .RequireRateLimiting("sensitive")
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/{id:guid}/payments",
+        async (Guid id, CustomerPaymentService service, CancellationToken ct) =>
+            Results.Ok(await service.GetCurrent(id, ct)))
+    .WithTags("Customer payments")
+    .WithSummary("Get the current payment for an errand")
+    .Produces<ErrandPaymentDetails>()
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapGet(
+        "/{id:guid}/payments/{paymentId:guid}",
+        async (Guid id, Guid paymentId, CustomerPaymentService service, CancellationToken ct) =>
+            Results.Ok(await service.Get(id, paymentId, ct)))
+    .WithTags("Customer payments")
+    .WithSummary("Get an errand payment")
+    .Produces<ErrandPaymentDetails>()
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapPost(
+        "/{id:guid}/payments/{paymentId:guid}/verify",
+        async (Guid id, Guid paymentId, CustomerPaymentService service, CancellationToken ct) =>
+            Results.Ok(await service.Verify(id, paymentId, ct)))
+    .WithTags("Customer payments")
+    .WithSummary("Verify an errand payment")
+    .WithDescription(
+        "Verifies the provider reference, amount, and currency server-to-server. " +
+        "Only verified success moves the errand to PaymentConfirmed.")
+    .Produces<ErrandPaymentDetails>()
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .ProducesProblem(StatusCodes.Status502BadGateway)
+    .RequireRateLimiting("sensitive")
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
 errands.MapGet(
         "/{id:guid}/tracking",
         async (Guid id, ErrandService service, CancellationToken ct) =>
@@ -1033,6 +1187,24 @@ errands.MapPost(
     .WithTags("Customer errands")
     .WithSummary("Cancel an errand")
     .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+errands.MapDelete(
+        "/{id:guid}",
+        async (Guid id, ErrandService service, CancellationToken ct) =>
+        {
+            await service.DeleteUnpaid(id, ct);
+            return Results.NoContent();
+        })
+    .WithTags("Customer errands")
+    .WithSummary("Delete an unpaid errand")
+    .WithDescription(
+        "Permanently deletes a customer-owned errand only while it is Draft, PendingEstimate, or PendingPayment. " +
+        "Paid or active errands must use cancellation instead.")
+    .Produces(StatusCodes.Status204NoContent)
+    .ProducesProblem(StatusCodes.Status403Forbidden)
+    .ProducesProblem(StatusCodes.Status404NotFound)
     .ProducesProblem(StatusCodes.Status409Conflict)
     .RequireAuthorization(policy => policy.RequireRole("Customer"));
 
@@ -1231,3 +1403,11 @@ public sealed class HttpCurrentUser(IHttpContextAccessor accessor)
 
 // Expose the Program class for integration tests and other tooling.
 public partial class Program;
+
+public sealed class UpdateProfileForm
+{
+    public string DisplayName { get; init; } = string.Empty;
+    public string? PhoneNumber { get; init; }
+    public string? Bio { get; init; }
+    public IFormFile? ProfilePicture { get; init; }
+}

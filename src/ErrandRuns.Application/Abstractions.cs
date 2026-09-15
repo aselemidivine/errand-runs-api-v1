@@ -14,6 +14,7 @@ public interface IErrandRepository
     Task<int> CountForUser(Guid userId, bool runner, bool? active, CancellationToken ct);
     Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct);
     Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct);
+    void Remove(Errand value);
     Task Save(CancellationToken ct);
 }
 public interface IRunnerRepository { Task<RunnerProfile?> Find(Guid id, CancellationToken ct); Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct); Task Save(CancellationToken ct); }
@@ -32,9 +33,31 @@ public interface IRunnerFinanceRepository
     void AddPayout(RunnerPayout payout);
     Task Save(CancellationToken ct);
 }
+public interface IPaymentRepository
+{
+    Task<Payment?> Find(Guid paymentId, CancellationToken ct);
+    Task<Payment?> FindByReference(string providerReference, CancellationToken ct);
+    Task<Payment?> FindByIdempotencyKey(string idempotencyKey, CancellationToken ct);
+    Task<Payment?> FindCurrentForErrand(Guid errandId, CancellationToken ct);
+    Task Add(Payment payment, CancellationToken ct);
+    Task Save(CancellationToken ct);
+}
 public interface IPricingService { Money Estimate(int stopCount, decimal membershipDiscountPercent); }
 public interface IRunnerMatchingService { Task<Guid?> FindRunner(Errand errand, CancellationToken ct); }
-public interface IPaymentGateway { Task<PaymentIntent> CreateIntent(Guid paymentId, Money amount, CancellationToken ct); Task<bool> Verify(string providerReference, CancellationToken ct); }
+public interface IPaymentGateway
+{
+    Task<PaymentIntent> CreateIntent(
+        Guid paymentId,
+        Guid errandId,
+        Money amount,
+        string customerEmail,
+        string paymentMethod,
+        CancellationToken ct);
+    Task<PaymentVerification> Verify(
+        string providerReference,
+        Money expectedAmount,
+        CancellationToken ct);
+}
 public interface IPayoutGateway
 {
     Task<PayoutRecipient> CreateRecipient(string bankCode, string accountNumber, string name, CancellationToken ct);
@@ -72,7 +95,11 @@ public sealed record AccountDetails(
     bool PhoneNumberConfirmed,
     string? Bio,
     string Role,
-    RunnerStatus? RunnerStatus);
+    RunnerStatus? RunnerStatus,
+    string? ProfilePictureUrl,
+    DateTimeOffset? ProfilePictureUpdatedAt);
+public sealed record ProfilePictureUpload(byte[] Data, string ContentType);
+public sealed record ProfilePictureContent(byte[] Data, string ContentType, DateTimeOffset UpdatedAt);
 public sealed record AuthenticationResult(AccountDetails? Account, IReadOnlyDictionary<string, string[]> Errors)
 {
     public bool Succeeded => Account is not null && Errors.Count == 0;
@@ -87,12 +114,45 @@ public interface IAuthenticationService
     Task<AuthenticationResult> ChangePassword(Guid userId, ChangePassword request, CancellationToken ct);
     Task<AccountDetails?> GetAccount(Guid userId, CancellationToken ct);
     Task<AuthenticationResult> UpdateAccount(Guid userId, UpdateAccount request, CancellationToken ct);
+    Task<AuthenticationResult> UpdateAccountProfile(
+        Guid userId, UpdateAccount request, ProfilePictureUpload? profilePicture, CancellationToken ct);
+    Task<ProfilePictureContent?> GetProfilePicture(Guid userId, CancellationToken ct);
+    Task<AuthenticationResult> RemoveProfilePicture(Guid userId, CancellationToken ct);
     Task<PasswordResetTicket?> CreatePasswordReset(ForgotPassword request, CancellationToken ct);
     Task<AuthenticationResult> ResetPassword(ResetPassword request, CancellationToken ct);
     Task<PhoneVerificationChallengeDetails> RequestPhoneVerification(Guid userId, bool includeDevelopmentCode, CancellationToken ct);
     Task<AuthenticationResult> VerifyPhoneNumber(Guid userId, VerifyPhoneNumber request, CancellationToken ct);
 }
-public sealed record PaymentIntent(string Reference, string CheckoutUrl);
+public sealed record InitializeErrandPayment(string PaymentMethod = "card");
+public sealed record PaymentIntent(
+    string Provider,
+    string Reference,
+    string? CheckoutUrl,
+    string? AccessCode,
+    bool DevelopmentMode = false);
+public sealed record PaymentVerification(
+    string Reference,
+    string Status,
+    decimal Amount,
+    string Currency)
+{
+    public bool Succeeded => Status.Equals("success", StringComparison.OrdinalIgnoreCase);
+    public bool IsFinalFailure => Status is "failed" or "abandoned" or "reversed";
+}
+public sealed record ErrandPaymentDetails(
+    Guid Id,
+    Guid ErrandId,
+    PaymentStatus Status,
+    string Provider,
+    string PaymentMethod,
+    string? Reference,
+    string? AuthorizationUrl,
+    string? CheckoutUrl,
+    string? AccessCode,
+    MoneyDetails Amount,
+    bool DevelopmentMode,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt);
 public sealed record CreateStop(int Sequence, StopType Type, string Address, decimal Latitude, decimal Longitude, string? Instructions);
 public sealed record CreateErrandItem(string Name, int Quantity, string? Unit = null, decimal? EstimatedUnitPrice = null);
 public sealed record CreateErrand(
@@ -198,6 +258,13 @@ public sealed class ErrandService(IErrandRepository errands, IRunnerRepository r
         await errands.Save(ct);
         if (runnerId is Guid cancelledRunner) await notifications.Publish(cancelledRunner, NotificationType.ErrandUpdate, "Errand cancelled", e.Title, e.Id, ct);
         return Map(e);
+    }
+    public async Task DeleteUnpaid(Guid id, CancellationToken ct)
+    {
+        var e = await Owned(id, false, ct);
+        e.EnsureCanDeleteUnpaid();
+        errands.Remove(e);
+        await errands.Save(ct);
     }
     public async Task<ErrandSummary> ConfirmCompletion(Guid id, CancellationToken ct)
     {

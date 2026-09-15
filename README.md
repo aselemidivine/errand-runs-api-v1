@@ -21,6 +21,9 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/auth/login` | None | Signs in either account type and returns a JWT. |
 | GET | `/api/v1/auth/me` | Customer or Runner | Returns the signed-in account; runner responses include runner status. |
 | PUT | `/api/v1/auth/me` | Customer or Runner | Updates the display name, phone number, and profile bio. |
+| PUT | `/api/v1/auth/me/profile` | Customer or Runner | Updates profile fields and uploads a JPEG, PNG, or WebP profile picture using multipart form data. |
+| DELETE | `/api/v1/auth/me/profile-picture` | Customer or Runner | Removes the signed-in user's profile picture. |
+| GET | `/api/v1/users/{userId}/profile-picture` | Customer or Runner | Returns a stored profile picture to authenticated users. |
 | POST | `/api/v1/auth/change-password` | Customer or Runner | Changes the signed-in account password. |
 | POST | `/api/v1/auth/forgot-password` | None | Starts password recovery without disclosing whether the account exists. |
 | POST | `/api/v1/auth/reset-password` | None | Sets a new password using a password-reset token. |
@@ -43,6 +46,7 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | GET | `/api/v1/errands/{id}/estimate` | Customer owner | Returns the server-calculated service fee and total estimate. |
 | GET | `/api/v1/errands/{id}/tracking` | Customer owner | Returns stop progress and the assigned runner ID. |
 | POST | `/api/v1/errands/{id}/cancel` | Customer owner | Cancels an errand that has not already completed or been cancelled. |
+| DELETE | `/api/v1/errands/{id}` | Customer owner | Permanently deletes an unpaid Draft, PendingEstimate, or PendingPayment errand. |
 | POST | `/api/v1/errands/{id}/confirm-completion` | Customer owner | Confirms receipt after every stop has been completed. |
 | POST | `/api/v1/errands/{id}/match` | Customer owner | Assigns the highest-ranked available runner. The errand must be in `PaymentConfirmed`. |
 | POST | `/api/v1/errands/{id}/accept` | Assigned runner | Accepts an assigned errand. |

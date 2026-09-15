@@ -24,6 +24,8 @@ services:
       ExternalServices__Paystack__SecretKey: ${PAYSTACK_SECRET_KEY:-}
       ExternalServices__Paystack__PublicKey: ${PAYSTACK_PUBLIC_KEY:-}
       ExternalServices__Paystack__WebhookSecret: ${PAYSTACK_WEBHOOK_SECRET:-}
+      ExternalServices__Paystack__BaseUrl: ${PAYSTACK_BASE_URL:-https://api.paystack.co}
+      ExternalServices__Paystack__CallbackUrl: ${PAYSTACK_CALLBACK_URL:-}
       ExternalServices__SendGrid__Enabled: ${SENDGRID_ENABLED:-false}
       ExternalServices__SendGrid__ApiKey: ${SENDGRID_API_KEY:-}
       ExternalServices__SendGrid__FromEmail: ${SENDGRID_FROM_EMAIL:-}

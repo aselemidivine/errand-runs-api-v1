@@ -26,6 +26,8 @@ dotnet restore ErrandRuns.slnx
 dotnet run --project src/ErrandRuns.Api --urls http://localhost:5055
 ```
 
+When run from the repository, Google Maps and IP-geolocation settings are also loaded from the root `.env`. Set `GOOGLE_MAPS_ENABLED=true` and `GOOGLE_MAPS_SERVER_API_KEY=...`, then restart the API. The older `GOOGLE_MAPS_API_KEY` name remains supported for compatibility, but the server-specific name is preferred.
+
 Open `http://localhost:5055/swagger`, register a customer or runner, copy the returned `accessToken`, choose **Authorize**, and paste only the token. Do not type `Bearer`; Swagger adds that prefix automatically. Then call `GET /api/v1/auth/me`.
 
 ## Run without Docker (SQL Server LocalDB)

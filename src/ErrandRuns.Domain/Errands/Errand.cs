@@ -351,6 +351,18 @@ public sealed class Errand
         Status = ErrandStatus.Cancelled;
     }
 
+    public void EnsureCanDeleteUnpaid()
+    {
+        if (Status is not (
+            ErrandStatus.Draft or
+            ErrandStatus.PendingEstimate or
+            ErrandStatus.PendingPayment))
+        {
+            throw new DomainException(
+                "Only an unpaid errand can be deleted. Cancel paid or active errands instead.");
+        }
+    }
+
     private ErrandStop NextStop(Guid id)
     {
         var next = Stops.FirstOrDefault(

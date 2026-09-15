@@ -9,6 +9,19 @@ namespace ErrandRuns.UnitTests;
 public sealed class CustomerErrandListTests
 {
     [Fact]
+    public async Task Customer_can_delete_their_unpaid_errand()
+    {
+        var errand = NewErrand();
+        errand.RequestEstimate();
+        errand.SetEstimate(new(2500), new(5000));
+        var repository = new QueryRepository(errand);
+
+        await Create(repository).DeleteUnpaid(errand.Id, TestContext.Current.CancellationToken);
+
+        Assert.Same(errand, repository.Removed);
+    }
+
+    [Fact]
     public async Task Create_accepts_a_single_stop_grocery_errand_without_delivery()
     {
         var repository = new QueryRepository(NewErrand());
@@ -71,6 +84,7 @@ public sealed class CustomerErrandListTests
     private sealed class QueryRepository(Errand errand) : IErrandRepository
     {
         public Errand? Added { get; private set; }
+        public Errand? Removed { get; private set; }
         public int LastSkip { get; private set; }
         public int LastTake { get; private set; }
         public string? LastSearch { get; private set; }
@@ -80,6 +94,7 @@ public sealed class CustomerErrandListTests
         public Task<int> CountForUser(Guid userId, bool runner, bool? active, CancellationToken ct) => Task.FromResult(1);
         public Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct) { LastSearch = query; return Task.FromResult<IReadOnlyList<Errand>>([errand]); }
         public Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct) => Task.FromResult(1);
+        public void Remove(Errand value) => Removed = value;
         public Task Save(CancellationToken ct) => Task.CompletedTask;
     }
 

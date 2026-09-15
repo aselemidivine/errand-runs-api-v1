@@ -1,6 +1,6 @@
 # External service configuration
 
-Copy `.env.example` to `.env` for Docker Compose. The `.env` file is ignored by Git. In hosted environments, inject the same settings from a managed secret store instead of deploying an `.env` file.
+Copy `.env.example` to `.env` for local development. Docker Compose translates the short names in that file to ASP.NET Core configuration names. A direct `dotnet run` also loads the Google Maps and IP-geolocation entries from the repository-root `.env`. The `.env` file is ignored by Git. In hosted environments, inject settings from a managed secret store instead of deploying an `.env` file.
 
 | Capability | Initial provider | Configuration section | Intended use |
 |---|---|---|---|
@@ -28,7 +28,7 @@ maps to:
 ExternalServices:Paystack:SecretKey
 ```
 
-The shorter names in `.env.example` are translated to these ASP.NET Core names by `docker-compose.yml`.
+The shorter names in `.env.example` are translated to these ASP.NET Core names by `docker-compose.yml`. For direct local execution, the API maps `GOOGLE_MAPS_SERVER_API_KEY` to `GoogleMaps:ServerApiKey`; the legacy `GOOGLE_MAPS_API_KEY` name is accepted temporarily for compatibility. Real process environment variables using double underscores take precedence over `.env` values.
 
 ## Secret-handling rules
 
@@ -56,6 +56,15 @@ Configure a server-only key through secrets or environment variables:
 GoogleMaps__Enabled=true
 GoogleMaps__ServerApiKey=replace-with-a-restricted-server-key
 ```
+
+For a repository-root `.env` used with `dotnet run`, use the short equivalents:
+
+```text
+GOOGLE_MAPS_ENABLED=true
+GOOGLE_MAPS_SERVER_API_KEY=replace-with-a-restricted-server-key
+```
+
+Restart the API after changing either form; configuration is read at startup.
 
 Restrict the key to those two APIs and to the production server identity or egress IP. Do not put it in a mobile build, response, query string, source-controlled settings file, or client-side Google SDK configuration. The backend transmits it to Google in `X-Goog-Api-Key` headers and uses field masks to limit returned and billable Place fields.
 
