@@ -9,6 +9,7 @@ using System.Threading.RateLimiting;
 using ErrandRuns.Application;
 using ErrandRuns.Api;
 using ErrandRuns.Domain.Common;
+using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Errands;
 using ErrandRuns.Infrastructure;
 using ErrandRuns.Infrastructure.Configuration;
@@ -18,6 +19,7 @@ using ErrandRuns.Infrastructure.Payments;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
@@ -174,6 +176,16 @@ builder.Services
         };
         options.Events = new JwtBearerEvents
         {
+            OnTokenValidated = async context =>
+            {
+                var subject = context.Principal?.FindFirstValue(JwtRegisteredClaimNames.Sub);
+                if (!Guid.TryParse(subject, out var userId) ||
+                    !await context.HttpContext.RequestServices
+                        .GetRequiredService<ErrandRunsDbContext>()
+                        .Users.AnyAsync(user => user.Id == userId,
+                            context.HttpContext.RequestAborted))
+                    context.Fail("Account no longer exists.");
+            },
             OnMessageReceived = context =>
             {
                 var token = context.Request.Query["access_token"];
@@ -489,11 +501,15 @@ auth.MapPost(
             RegisterAccount request,
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
+            INotificationPublisher notifications,
             CancellationToken ct) =>
         {
             var result =
                 await accounts.RegisterCustomer(request, ct);
-
+            if (result.Succeeded)
+                await notifications.Publish(result.Account!.Id, NotificationType.System,
+                    "Welcome to ErrandRuns", "Your customer account is ready. Create your first errand when you are ready.",
+                    null, ct);
             return result.Succeeded
                 ? Results.Created(
                     "/api/v1/auth/me",
@@ -516,11 +532,15 @@ auth.MapPost(
             RegisterAccount request,
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
+            INotificationPublisher notifications,
             CancellationToken ct) =>
         {
             var result =
                 await accounts.RegisterRunner(request, ct);
-
+            if (result.Succeeded)
+                await notifications.Publish(result.Account!.Id, NotificationType.System,
+                    "Welcome to ErrandRuns", "Submit your runner profile for verification before accepting errands.",
+                    null, ct);
             return result.Succeeded
                 ? Results.Created(
                     "/api/v1/auth/me",
@@ -607,6 +627,26 @@ auth.MapPut(
     .Produces<AccountDetails>()
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .RequireAuthorization();
+
+auth.MapDelete(
+        "/me",
+        async ([FromBody] DeleteAccountRequest request, ICurrentUser current,
+            IAuthenticationService accounts, CancellationToken ct) =>
+        {
+            await accounts.DeleteAccount(current.UserId, request, ct);
+            return Results.NoContent();
+        })
+    .WithSummary("Delete the signed-in account")
+    .WithDescription(
+        "Requires the current password in a JSON body. Rejects deletion while errands are active, " +
+        "runner payouts are unsettled, or runner earnings remain. Removes login, profile, saved locations " +
+        "and notifications; historical errand and payment records remain for reconciliation. Existing tokens are invalidated.")
+    .Produces(StatusCodes.Status204NoContent)
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status403Forbidden)
+    .ProducesProblem(StatusCodes.Status409Conflict)
+    .RequireRateLimiting("sensitive")
     .RequireAuthorization();
 
 auth.MapPut(

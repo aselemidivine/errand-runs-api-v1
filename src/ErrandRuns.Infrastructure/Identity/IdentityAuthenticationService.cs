@@ -1,6 +1,8 @@
 using ErrandRuns.Application;
 using ErrandRuns.Domain.Runners;
 using ErrandRuns.Domain.Common;
+using ErrandRuns.Domain.Errands;
+using ErrandRuns.Domain.Payments;
 using ErrandRuns.Domain.Users;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +54,49 @@ public sealed class IdentityAuthenticationService(
         return result.Succeeded
             ? AuthenticationResult.Success(await ToAccount(user, ct))
             : Failure(result);
+    }
+
+    public async Task DeleteAccount(Guid userId, DeleteAccountRequest request, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(request.CurrentPassword))
+            throw new ArgumentException("Current password is required.");
+        var user = await users.FindByIdAsync(userId.ToString())
+            ?? throw new KeyNotFoundException("Account was not found.");
+        if (!await users.CheckPasswordAsync(user, request.CurrentPassword))
+            throw new UnauthorizedAccessException("Current password is incorrect.");
+
+        var hasOpenErrands = await db.Errands.AnyAsync(errand =>
+            (errand.CustomerId == userId || errand.RunnerId == userId) &&
+            errand.Status != ErrandStatus.Completed &&
+            errand.Status != ErrandStatus.Cancelled &&
+            errand.Status != ErrandStatus.Failed, ct);
+        if (hasOpenErrands)
+            throw new DomainException("Complete or cancel active errands before deleting your account.");
+
+        var hasOpenPayout = await db.RunnerPayouts.AnyAsync(payout =>
+            payout.RunnerId == userId &&
+            (payout.Status == RunnerPayoutStatus.Pending ||
+             payout.Status == RunnerPayoutStatus.Submitted), ct);
+        if (hasOpenPayout)
+            throw new DomainException("Wait for your pending runner payout before deleting your account.");
+
+        var ledger = await db.RunnerLedger.Where(entry => entry.RunnerId == userId)
+            .Select(entry => new { entry.Type, entry.Amount, entry.Currency })
+            .ToListAsync(ct);
+        if (ledger.GroupBy(entry => entry.Currency).Any(group =>
+                group.Sum(entry => entry.Type == RunnerLedgerEntryType.Payout
+                    ? -entry.Amount : entry.Amount) > 0))
+            throw new DomainException("Withdraw your available runner earnings before deleting your account.");
+
+        db.Notifications.RemoveRange(await db.Notifications
+            .Where(value => value.RecipientId == userId).ToListAsync(ct));
+        db.RunnerPayoutAccounts.RemoveRange(await db.RunnerPayoutAccounts
+            .Where(value => value.RunnerId == userId).ToListAsync(ct));
+        await db.SaveChangesAsync(ct);
+
+        var result = await users.DeleteAsync(user);
+        if (!result.Succeeded)
+            throw new DomainException("The account could not be deleted. Please try again.");
     }
 
     public async Task<AccountDetails?> GetAccount(Guid userId, CancellationToken ct)

@@ -67,6 +67,8 @@ public sealed class CustomerPaymentService(
             intent.AccessCode,
             clock.UtcNow);
         await payments.Save(ct);
+        await notifications.Publish(current.UserId, NotificationType.Payment,
+            "Checkout started", "Complete the payment to begin runner matching.", errand.Id, ct);
         return Map(payment, intent.DevelopmentMode);
     }
 
@@ -143,6 +145,9 @@ public sealed class CustomerPaymentService(
         {
             payment.MarkFailed(clock.UtcNow);
             await payments.Save(ct);
+            await notifications.Publish(payment.CustomerId, NotificationType.Payment,
+                "Payment not completed", "The payment was not completed. Try another payment method.",
+                payment.ErrandId, ct);
         }
     }
 
