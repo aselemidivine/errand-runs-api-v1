@@ -132,7 +132,7 @@ public sealed class GooglePlacesClient(
             value.TryGetProperty("types", out var types)
                 ? types.EnumerateArray().Select(type => type.GetString() ?? string.Empty).Where(type => type.Length > 0).ToArray()
                 : [])).ToArray();
-    }
+    }  
 
     internal static ViewportDetails? Viewport(JsonElement root)
     {

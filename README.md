@@ -21,6 +21,7 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/auth/login` | None | Signs in either account type and returns a JWT. |
 | GET | `/api/v1/auth/me` | Customer or Runner | Returns the signed-in account; runner responses include runner status. |
 | PUT | `/api/v1/auth/me` | Customer or Runner | Updates the display name, phone number, and profile bio. |
+| DELETE | `/api/v1/auth/me` | Customer or Runner | Deletes the signed-in account after current-password confirmation, subject to active-work and payout safeguards. |
 | PUT | `/api/v1/auth/me/profile` | Customer or Runner | Updates profile fields and uploads a JPEG, PNG, or WebP profile picture using multipart form data. |
 | DELETE | `/api/v1/auth/me/profile-picture` | Customer or Runner | Removes the signed-in user's profile picture. |
 | GET | `/api/v1/users/{userId}/profile-picture` | Customer or Runner | Returns a stored profile picture to authenticated users. |
@@ -79,6 +80,8 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 Passwords require at least 8 characters, with uppercase, lowercase, and numeric characters. New runner accounts have an `Applicant` runner status and cannot be matched until the future verification workflow makes them available. Domain-rule failures return RFC 7807 Problem Details with `409`; missing resources return `404`; missing or insufficient credentials return `401` or `403`.
 
 Phone verification uses a six-digit, account-bound challenge. Codes expire after 10 minutes, resend is available after 60 seconds, and five incorrect attempts invalidate the challenge. Development responses contain `developmentCode` for Swagger testing; production sends the code through the configured Termii DND SMS route and never returns it. Saved locations store the map pin, address, optional Google place metadata, landmark, gate/delivery instructions, favorite/default flags, and preferred errand categories. A user can store up to 20 locations and has at most one default home base.
+
+The notifications feed records a system welcome message, errand creation and immediate payment-required notices, checkout start and payment outcome, runner assignment/match, each stop start/completion, and a final customer confirmation reminder. `Payment required` is emitted when an unpaid errand is created; it is not a scheduled reminder. Request account deletion with `DELETE /api/v1/auth/me` and JSON `{"currentPassword":"your-password"}`. Deletion returns `204`, but is rejected while the account has active errands, unsettled runner payouts, or withdrawable runner earnings. Login, profile, saved locations, and notifications are removed; historical errand and payment records remain for reconciliation, and existing access tokens stop working.
 
 Runner earnings are credited only when the customer confirms a completed errand. The merchandise budget is excluded: the runner receives the configured `RunnerPayments:RunnerPercent` of the service fee (80% by default). Withdrawals include the configured fee (NGN 50 by default), require an `Idempotency-Key`, and store only Paystack's recipient token plus the account-number suffix. Signed Paystack webhooks mark transfers paid; failed or reversed transfers restore the ledger balance.
 

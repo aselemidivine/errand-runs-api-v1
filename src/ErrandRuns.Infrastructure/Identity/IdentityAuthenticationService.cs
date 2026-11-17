@@ -88,6 +88,11 @@ public sealed class IdentityAuthenticationService(
                     ? -entry.Amount : entry.Amount) > 0))
             throw new DomainException("Withdraw your available runner earnings before deleting your account.");
 
+        // Identity and cleanup share this DbContext. On SQL Server, commit the
+        // cleanup and account removal together so a failed delete rolls back.
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(ct)
+            : null;
         db.Notifications.RemoveRange(await db.Notifications
             .Where(value => value.RecipientId == userId).ToListAsync(ct));
         db.RunnerPayoutAccounts.RemoveRange(await db.RunnerPayoutAccounts
@@ -97,6 +102,7 @@ public sealed class IdentityAuthenticationService(
         var result = await users.DeleteAsync(user);
         if (!result.Succeeded)
             throw new DomainException("The account could not be deleted. Please try again.");
+        if (transaction is not null) await transaction.CommitAsync(ct);
     }
 
     public async Task<AccountDetails?> GetAccount(Guid userId, CancellationToken ct)
