@@ -11,6 +11,7 @@ using ErrandRuns.Api;
 using ErrandRuns.Domain.Common;
 using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Errands;
+using ErrandRuns.Domain.Runners;
 using ErrandRuns.Infrastructure;
 using ErrandRuns.Infrastructure.Configuration;
 using ErrandRuns.Infrastructure.Identity;
@@ -95,6 +96,8 @@ builder.Services
 // Register application and domain services using dependency injection.
 builder.Services.AddScoped<IErrandRepository, ErrandRepository>();
 builder.Services.AddScoped<IRunnerRepository, RunnerRepository>();
+builder.Services.AddScoped<IRunnerVerificationRepository, RunnerVerificationRepository>();
+builder.Services.AddScoped<IPrivateDocumentStorage, LocalPrivateDocumentStorage>();
 builder.Services.AddScoped<IRunnerFinanceRepository, RunnerFinanceRepository>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IUserPreferenceRepository, UserPreferenceRepository>();
@@ -102,6 +105,8 @@ builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 builder.Services.AddScoped<ErrandService>();
 builder.Services.AddScoped<RunnerService>();
+builder.Services.AddScoped<RunnerVerificationService>();
+builder.Services.AddScoped<RunnerOfferService>();
 builder.Services.AddScoped<RunnerFinanceService>();
 builder.Services.AddScoped<CustomerPaymentService>();
 builder.Services.AddScoped<NotificationService>();
@@ -201,7 +206,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddProblemDetails();
 builder.Services.AddSignalR();
 builder.Services.Configure<FormOptions>(options =>
-    options.MultipartBodyLengthLimit = ProfilePictureValidator.MaximumFileBytes + 64 * 1024);
+    options.MultipartBodyLengthLimit = VerificationDocumentValidator.MaximumFileBytes + 64 * 1024);
 
 // Register OpenAPI and Swagger services.
 builder.Services.AddOpenApi();
@@ -351,11 +356,15 @@ app.UseExceptionHandler(
                     BadHttpRequestException => 400,
                     ArgumentException => 400,
                     DomainException => 409,
+                    ConcurrencyConflictException => 409,
                     KeyNotFoundException => 404,
                     UnauthorizedAccessException => 403,
                     ExternalServiceException external => external.StatusCode,
                     _ => 500
                 };
+
+                if (status == 500)
+                    Log.Error(error, "Unhandled API exception. TraceId: {TraceId}", context.TraceIdentifier);
 
                 context.Response.StatusCode = status;
 
@@ -366,7 +375,7 @@ app.UseExceptionHandler(
                             ? "Unexpected server error"
                             : "Request could not be completed",
                         detail: status == 500
-                            ? null
+                            ? (app.Environment.IsDevelopment() ? error?.Message : null)
                             : error?.Message,
                         extensions: new Dictionary<string, object?>
                         {
@@ -972,8 +981,89 @@ runnerApi.MapPut("/availability", async (SetRunnerAvailability request, RunnerSe
 
 runnerApi.MapPost("/verification/submit", async (RunnerService service, CancellationToken ct) =>
         Results.Ok(await service.SubmitVerification(ct)))
-    .WithSummary("Submit runner profile for verification")
+    .WithSummary("Legacy runner verification submission")
+    .WithDescription("Compatibility endpoint. New clients should complete /verifications/identity and /verifications/vehicle, then call /verifications/submit.")
     .Produces<RunnerDashboard>()
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapGet("/verifications", async (RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.Get(ct)))
+    .WithSummary("Get runner verification progress")
+    .WithDescription("Returns identity, vehicle, background-review, rejection, and completion progress without exposing private document object keys.")
+    .Produces<RunnerVerificationDetails>();
+
+runnerApi.MapPost("/verifications/identity", async (
+        HttpRequest httpRequest, RunnerVerificationService service, CancellationToken ct) =>
+    {
+        if (!httpRequest.HasFormContentType)
+            throw new BadHttpRequestException("Identity verification requires multipart/form-data.");
+        var form = await httpRequest.ReadFormAsync(ct);
+        if (!Enum.TryParse<GovernmentIdType>(form["documentType"].ToString(), true, out var documentType))
+            throw new ArgumentException("documentType must be NinSlip, NationalIdCard, DriversLicense, or InternationalPassport.");
+        var file = form.Files.GetFile("document")
+            ?? throw new ArgumentException("A document file is required.");
+        return Results.Ok(await service.SetIdentity(
+            new(documentType, await VerificationDocumentValidator.Read(file, ct)), ct));
+    })
+    .WithSummary("Upload government-issued identity document")
+    .WithDescription("Accepts documentType and a private JPEG, PNG, or PDF document up to 10 MB. File signatures are validated; object keys are never returned.")
+    .Produces<RunnerVerificationDetails>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapPost("/verifications/vehicle", async (
+        HttpRequest httpRequest, RunnerVerificationService service, CancellationToken ct) =>
+    {
+        if (!httpRequest.HasFormContentType)
+            throw new BadHttpRequestException("Vehicle verification requires multipart/form-data.");
+        var form = await httpRequest.ReadFormAsync(ct);
+        if (!Enum.TryParse<RunnerVehicleType>(form["vehicleType"].ToString(), true, out var vehicleType))
+            throw new ArgumentException("vehicleType must be Motorbike, Car, Bicycle, or Walking.");
+        DocumentUpload? ownership = null;
+        var file = form.Files.GetFile("ownershipDocument");
+        if (file is not null) ownership = await VerificationDocumentValidator.Read(file, ct);
+        return Results.Ok(await service.SetVehicle(new(vehicleType,
+            form["plateNumber"].ToString(), form["makeModel"].ToString(), ownership), ct));
+    })
+    .WithSummary("Submit runner vehicle and ownership information")
+    .WithDescription("Motorbike and Car require plateNumber, makeModel, and ownershipDocument. Bicycle and Walking require no ownership document.")
+    .Produces<RunnerVerificationDetails>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapPost("/verifications/submit", async (
+        RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.Submit(ct)))
+    .WithSummary("Submit completed verification for background review")
+    .Produces<RunnerVerificationDetails>()
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapGet("/offers", async (decimal latitude, decimal longitude,
+        decimal? radiusKm, ErrandCategory? category, int? page, int? pageSize,
+        RunnerOfferService service, CancellationToken ct) =>
+        Results.Ok(await service.Nearby(latitude, longitude, radiusKm ?? 15m,
+            category, page ?? 1, pageSize ?? 20, ct)))
+    .WithSummary("List paid errands near an available runner")
+    .WithDescription("Returns privacy-scoped list/map cards ordered by straight-line distance. Runner must be verified and online. radiusKm defaults to 15 and is capped at 50.")
+    .Produces<PagedRunnerOffers>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapGet("/offers/{id:guid}", async (Guid id, decimal latitude,
+        decimal longitude, RunnerOfferService service, CancellationToken ct) =>
+        Results.Ok(await service.Get(id, latitude, longitude, ct)))
+    .WithSummary("Get nearby errand offer route and item details")
+    .Produces<RunnerOfferDetails>()
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapPost("/offers/{id:guid}/accept", async (Guid id,
+        RunnerOfferService service, CancellationToken ct) =>
+        Results.Ok(await service.Accept(id, ct)))
+    .WithSummary("Atomically accept an available errand")
+    .WithDescription("First verified online runner wins. Row-version concurrency prevents two runners from accepting the same errand.")
+    .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status404NotFound)
     .ProducesProblem(StatusCodes.Status409Conflict);
 
 runnerApi.MapGet("/jobs", async (bool? active, int page, int pageSize, RunnerService service, CancellationToken ct) =>
@@ -1037,6 +1127,34 @@ runnerApi.MapPost("/payouts", async (RequestPayout request, HttpContext context,
     .WithDescription("Requires an Idempotency-Key header. Paystack receives the transfer request in kobo.")
     .Produces<PayoutDetails>(StatusCodes.Status202Accepted)
     .ProducesProblem(StatusCodes.Status409Conflict);
+
+var runnerVerificationAdmin = app.MapGroup("/api/v1/admin/runner-verifications")
+    .WithTags("Runner verification administration")
+    .RequireAuthorization(policy => policy.RequireRole("Admin"));
+
+runnerVerificationAdmin.MapGet("/", async (int? page, int? pageSize,
+        RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.Pending(page ?? 1, pageSize ?? 20, ct)))
+    .WithSummary("List submitted runner verifications")
+    .Produces<PagedRunnerVerifications>();
+
+runnerVerificationAdmin.MapPost("/{runnerId:guid}/review", async (Guid runnerId,
+        RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.BeginReview(runnerId, ct)))
+    .WithSummary("Mark a verification as under review")
+    .Produces<RunnerVerificationDetails>();
+
+runnerVerificationAdmin.MapPost("/{runnerId:guid}/approve", async (Guid runnerId,
+        RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.Approve(runnerId, ct)))
+    .WithSummary("Approve runner identity, vehicle, and background verification")
+    .Produces<RunnerVerificationDetails>();
+
+runnerVerificationAdmin.MapPost("/{runnerId:guid}/reject", async (Guid runnerId,
+        ReviewRunnerVerification request, RunnerVerificationService service, CancellationToken ct) =>
+        Results.Ok(await service.Reject(runnerId, request.Reason, ct)))
+    .WithSummary("Reject runner verification with a reason")
+    .Produces<RunnerVerificationDetails>();
 
 // Customer-owned errand endpoints.
 var errands = app

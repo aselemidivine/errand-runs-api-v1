@@ -14,10 +14,25 @@ public interface IErrandRepository
     Task<int> CountForUser(Guid userId, bool runner, bool? active, CancellationToken ct);
     Task<IReadOnlyList<Errand>> SearchForCustomer(Guid customerId, string query, int skip, int take, CancellationToken ct);
     Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct);
+    Task<IReadOnlyList<Errand>> ListAvailableOffers(int take, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<Errand>>([]);
     void Remove(Errand value);
     Task Save(CancellationToken ct);
 }
 public interface IRunnerRepository { Task<RunnerProfile?> Find(Guid id, CancellationToken ct); Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct); Task Save(CancellationToken ct); }
+public interface IRunnerVerificationRepository
+{
+    Task<RunnerVerification?> Find(Guid runnerId, CancellationToken ct);
+    Task<IReadOnlyList<RunnerVerification>> Pending(int skip, int take, CancellationToken ct);
+    Task<int> CountPending(CancellationToken ct);
+    void Add(RunnerVerification verification);
+    Task Save(CancellationToken ct);
+}
+public interface IPrivateDocumentStorage
+{
+    Task<string> Save(Guid ownerId, string purpose, DocumentUpload document, CancellationToken ct);
+    Task Delete(string objectKey, CancellationToken ct);
+}
 public interface IRunnerFinanceRepository
 {
     Task<RunnerPayoutAccount?> GetPayoutAccount(Guid runnerId, CancellationToken ct);
@@ -189,6 +204,16 @@ public sealed record RequestPayout(decimal Amount, string Currency = "NGN");
 public sealed record PayoutDetails(Guid Id, MoneyDetails Amount, MoneyDetails Fee, RunnerPayoutStatus Status, string? ProviderReference, string? FailureReason, DateTimeOffset RequestedAt, DateTimeOffset? ProcessedAt);
 public sealed record LedgerEntryDetails(Guid Id, RunnerLedgerEntryType Type, MoneyDetails Amount, string Description, Guid? ErrandId, Guid? PayoutId, DateTimeOffset CreatedAt);
 public sealed record EarningsDashboard(MoneyDetails AvailableBalance, IReadOnlyList<LedgerEntryDetails> Transactions, int Page, int PageSize, int TotalCount);
+public sealed record DocumentUpload(byte[] Data, string ContentType, string FileName);
+public sealed record SubmitIdentityVerification(GovernmentIdType DocumentType, DocumentUpload Document);
+public sealed record SubmitVehicleVerification(RunnerVehicleType VehicleType, string? PlateNumber, string? MakeModel, DocumentUpload? OwnershipDocument);
+public sealed record ReviewRunnerVerification(string? Reason = null);
+public sealed record RunnerVerificationDetails(Guid RunnerId, VerificationStatus Status, GovernmentIdType? GovernmentIdType, bool HasIdentityDocument, RunnerVehicleType? VehicleType, string? VehiclePlateNumber, string? VehicleMakeModel, bool HasOwnershipDocument, DateTimeOffset? SubmittedAt, DateTimeOffset? ReviewedAt, string? RejectionReason, int ProgressPercent);
+public sealed record PagedRunnerVerifications(IReadOnlyList<RunnerVerificationDetails> Items, int Page, int PageSize, int TotalCount, int TotalPages);
+public sealed record RunnerOfferStop(Guid Id, int Sequence, StopType Type, string Address, decimal Latitude, decimal Longitude, string? Instructions);
+public sealed record RunnerOfferSummary(Guid ErrandId, string Title, ErrandCategory Category, int StopCount, decimal DistanceKm, int EstimatedMinutes, MoneyDetails ExpectedEarnings, DateTimeOffset? ScheduledFor, RunnerOfferStop FirstStop);
+public sealed record RunnerOfferDetails(RunnerOfferSummary Summary, string? PreferredProvider, string? SpecialInstructions, IReadOnlyList<RunnerOfferStop> Stops, IReadOnlyList<ErrandItemDetails> Items);
+public sealed record PagedRunnerOffers(IReadOnlyList<RunnerOfferSummary> Items, int Page, int PageSize, int TotalCount, int TotalPages);
 public sealed class PricingService : IPricingService
 {
     private const decimal BaseFee = 2500m, AdditionalStopFee = 750m;

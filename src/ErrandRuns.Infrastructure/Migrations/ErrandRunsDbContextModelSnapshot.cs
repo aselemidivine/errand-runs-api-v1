@@ -461,6 +461,60 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.ToTable("RunnerProfiles", "runners");
                 });
 
+            modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerVerification", b =>
+                {
+                    b.Property<Guid>("RunnerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("GovernmentIdType")
+                        .HasColumnType("int");
+
+                    b.Property<string>("IdentityDocumentKey")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("OwnershipDocumentKey")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("SubmittedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("VehicleMakeModel")
+                        .HasMaxLength(160)
+                        .HasColumnType("nvarchar(160)");
+
+                    b.Property<string>("VehiclePlateNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<int?>("VehicleType")
+                        .HasColumnType("int");
+
+                    b.HasKey("RunnerId");
+
+                    b.HasIndex("Status", "SubmittedAt");
+
+                    b.ToTable("RunnerVerifications", "runners");
+                });
+
             modelBuilder.Entity("ErrandRuns.Domain.Users.PhoneVerificationChallenge", b =>
                 {
                     b.Property<Guid>("Id")
@@ -944,6 +998,15 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.HasOne("ErrandRuns.Infrastructure.Identity.ApplicationUser", null)
                         .WithOne()
                         .HasForeignKey("ErrandRuns.Domain.Runners.RunnerProfile", "UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerVerification", b =>
+                {
+                    b.HasOne("ErrandRuns.Domain.Runners.RunnerProfile", null)
+                        .WithOne()
+                        .HasForeignKey("ErrandRuns.Domain.Runners.RunnerVerification", "RunnerId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
