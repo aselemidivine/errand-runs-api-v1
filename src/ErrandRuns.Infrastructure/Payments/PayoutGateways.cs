@@ -12,6 +12,23 @@ public sealed class PaystackPayoutGateway(
     IHttpClientFactory clients,
     IOptions<PaystackOptions> options) : IPayoutGateway
 {
+    public async Task<IReadOnlyList<PayoutBank>> ListBanks(CancellationToken ct)
+    {
+        using var response = await Client().GetAsync(
+            "/bank?country=nigeria&currency=NGN&type=nuban&perPage=100", ct);
+        var result = await Read(response, ct);
+        return result.GetProperty("data").EnumerateArray()
+            .Where(value => value.TryGetProperty("active", out var active) && active.GetBoolean())
+            .Select(value => new PayoutBank(
+                RequiredString(value, "name"),
+                RequiredString(value, "code"),
+                OptionalString(value, "type") ?? "nuban",
+                OptionalString(value, "country") ?? "Nigeria",
+                OptionalString(value, "currency") ?? "NGN"))
+            .OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     public async Task<PayoutRecipient> CreateRecipient(
         string bankCode, string accountNumber, string name, CancellationToken ct)
     {
@@ -74,10 +91,30 @@ public sealed class PaystackPayoutGateway(
         }
         return value;
     }
+
+    private static string RequiredString(JsonElement value, string property) =>
+        OptionalString(value, property)
+        ?? throw new DomainException($"Payout provider did not return bank {property}.");
+
+    private static string? OptionalString(JsonElement value, string property) =>
+        value.TryGetProperty(property, out var result) && result.ValueKind == JsonValueKind.String
+            ? result.GetString()
+            : null;
 }
 
 public sealed class DevelopmentPayoutGateway : IPayoutGateway
 {
+    private static readonly IReadOnlyList<PayoutBank> Banks =
+    [
+        new("Access Bank", "044", "nuban", "Nigeria", "NGN"),
+        new("First Bank of Nigeria", "011", "nuban", "Nigeria", "NGN"),
+        new("Guaranty Trust Bank", "058", "nuban", "Nigeria", "NGN"),
+        new("United Bank for Africa", "033", "nuban", "Nigeria", "NGN"),
+        new("Zenith Bank", "057", "nuban", "Nigeria", "NGN")
+    ];
+
+    public Task<IReadOnlyList<PayoutBank>> ListBanks(CancellationToken ct) => Task.FromResult(Banks);
+
     public Task<PayoutRecipient> CreateRecipient(string bankCode, string accountNumber, string name, CancellationToken ct) =>
         Task.FromResult(new PayoutRecipient("dev-recipient-" + Guid.NewGuid().ToString("N"), name.Trim(), accountNumber[^4..]));
 
@@ -87,6 +124,8 @@ public sealed class DevelopmentPayoutGateway : IPayoutGateway
 
 public sealed class UnavailablePayoutGateway : IPayoutGateway
 {
+    public Task<IReadOnlyList<PayoutBank>> ListBanks(CancellationToken ct) =>
+        throw new DomainException("Payout provider is not configured.");
     public Task<PayoutRecipient> CreateRecipient(string bankCode, string accountNumber, string name, CancellationToken ct) =>
         throw new DomainException("Payout provider is not configured.");
     public Task<PayoutSubmission> Submit(Guid payoutId, Money amount, string recipientCode, CancellationToken ct) =>

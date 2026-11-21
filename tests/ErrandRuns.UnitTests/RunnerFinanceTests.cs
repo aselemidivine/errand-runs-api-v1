@@ -37,6 +37,27 @@ public sealed class RunnerFinanceTests
     }
 
     [Fact]
+    public async Task Payout_account_uses_the_provider_bank_name_and_can_be_updated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var runnerId = Guid.NewGuid();
+        var runner = new RunnerProfile(runnerId);
+        runner.SubmitVerification();
+        runner.Approve();
+        var finance = new FakeFinance();
+        var service = new RunnerFinanceService(finance, new FakeRunners(runner),
+            new FakeGateway(), new RunnerCompensationPolicy(80),
+            new FakeCurrent(runnerId, "Runner"), new FakeClock());
+
+        var created = await service.SetAccount(new("058", "0123456789", false), ct);
+        var updated = await service.SetAccount(new("058", "9876543210", true), ct);
+
+        Assert.Equal("GTBank", created.BankName);
+        Assert.Equal("******3210", updated.MaskedAccountNumber);
+        Assert.True(updated.InstantPayout);
+    }
+
+    [Fact]
     public async Task Customer_confirmation_credits_runner_and_payout_debits_balance()
     {
         var ct=TestContext.Current.CancellationToken;
@@ -60,7 +81,7 @@ public sealed class RunnerFinanceTests
 
     private sealed class FakeCurrent(Guid id,string role):ICurrentUser{public Guid UserId=>id;public bool IsInRole(string value)=>value==role;}
     private sealed class FakeClock:IClock{public DateTimeOffset UtcNow=>DateTimeOffset.UtcNow;}
-    private sealed class FakeGateway:IPayoutGateway{public Task<PayoutRecipient>CreateRecipient(string b,string a,string n,CancellationToken ct)=>Task.FromResult(new PayoutRecipient("recipient",n,a[^4..]));public Task<PayoutSubmission>Submit(Guid id,Money amount,string code,CancellationToken ct)=>Task.FromResult(new PayoutSubmission("transfer"));}
+    private sealed class FakeGateway:IPayoutGateway{public Task<IReadOnlyList<PayoutBank>>ListBanks(CancellationToken ct)=>Task.FromResult<IReadOnlyList<PayoutBank>>([new("GTBank","058","nuban","Nigeria","NGN")]);public Task<PayoutRecipient>CreateRecipient(string b,string a,string n,CancellationToken ct)=>Task.FromResult(new PayoutRecipient("recipient",n,a[^4..]));public Task<PayoutSubmission>Submit(Guid id,Money amount,string code,CancellationToken ct)=>Task.FromResult(new PayoutSubmission("transfer"));}
     private sealed class FakeNotifications:INotificationPublisher{public Task Publish(Guid id,ErrandRuns.Domain.Communications.NotificationType type,string title,string body,Guid? errandId,CancellationToken ct)=>Task.CompletedTask;}
     private sealed class FakeErrands(Errand errand):IErrandRepository
     {public Task Add(Errand value,CancellationToken ct)=>Task.CompletedTask;public Task<Errand?>Find(Guid id,CancellationToken ct)=>Task.FromResult<Errand?>(id==errand.Id?errand:null);public Task<IReadOnlyList<Errand>>ListForUser(Guid id,bool runner,bool? active,int skip,int take,CancellationToken ct)=>Task.FromResult<IReadOnlyList<Errand>>([errand]);public Task<int>CountForUser(Guid id,bool runner,bool? active,CancellationToken ct)=>Task.FromResult(1);public Task<IReadOnlyList<Errand>>SearchForCustomer(Guid id,string query,int skip,int take,CancellationToken ct)=>Task.FromResult<IReadOnlyList<Errand>>([errand]);public Task<int>CountSearchForCustomer(Guid id,string query,CancellationToken ct)=>Task.FromResult(1);public void Remove(Errand value){}public Task Save(CancellationToken ct)=>Task.CompletedTask;}

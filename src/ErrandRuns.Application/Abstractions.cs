@@ -75,6 +75,7 @@ public interface IPaymentGateway
 }
 public interface IPayoutGateway
 {
+    Task<IReadOnlyList<PayoutBank>> ListBanks(CancellationToken ct);
     Task<PayoutRecipient> CreateRecipient(string bankCode, string accountNumber, string name, CancellationToken ct);
     Task<PayoutSubmission> Submit(Guid payoutId, Money amount, string recipientCode, CancellationToken ct);
 }
@@ -198,7 +199,8 @@ public sealed record PagedRunnerJobs(IReadOnlyList<RunnerJobSummary> Items, int 
 public sealed record RunnerJobDetails(ErrandDetails Errand, MoneyDetails ExpectedEarnings);
 public sealed record PayoutRecipient(string RecipientCode, string AccountName, string AccountNumberLast4);
 public sealed record PayoutSubmission(string Reference);
-public sealed record SetPayoutAccount(string BankCode, string BankName, string AccountNumber, bool InstantPayout);
+public sealed record PayoutBank(string Name, string Code, string Type, string Country, string Currency);
+public sealed record SetPayoutAccount(string BankCode, string AccountNumber, bool InstantPayout);
 public sealed record PayoutAccountDetails(string BankCode, string BankName, string AccountName, string MaskedAccountNumber, bool InstantPayout, DateTimeOffset UpdatedAt);
 public sealed record RequestPayout(decimal Amount, string Currency = "NGN");
 public sealed record PayoutDetails(Guid Id, MoneyDetails Amount, MoneyDetails Fee, RunnerPayoutStatus Status, string? ProviderReference, string? FailureReason, DateTimeOffset RequestedAt, DateTimeOffset? ProcessedAt);

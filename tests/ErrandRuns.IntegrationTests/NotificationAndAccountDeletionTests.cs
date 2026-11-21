@@ -117,8 +117,12 @@ public sealed class NotificationAndAccountDeletionTests : IClassFixture<WebAppli
     {
         using var response = await client.PostAsJsonAsync(
             $"/api/v1/auth/{kind}/register",
-            new { displayName = "Test Account", email = $"{Guid.NewGuid():N}@example.com",
-                password = "ValidPass123" }, cancellation);
+            new
+            {
+                displayName = "Test Account",
+                email = $"{Guid.NewGuid():N}@example.com",
+                password = "ValidPass123"
+            }, cancellation);
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(cancellation));
         return document.RootElement.GetProperty("accessToken").GetString()!;

@@ -77,9 +77,11 @@ public sealed class RunnerVerificationAndOffersTests : IClassFixture<WebApplicat
             "Bearer", await Register(customer, "customers", ct));
         using var createdResponse = await customer.PostAsJsonAsync("/api/v1/errands", new
         {
-            title = "Lekki grocery run", category = 0,
+            title = "Lekki grocery run",
+            category = 0,
             stops = new[] { new { sequence = 1, type = 1, address = "Lekki Market", latitude = 6.45m, longitude = 3.47m } },
-            merchandiseEstimate = 5000m, currency = "NGN"
+            merchandiseEstimate = 5000m,
+            currency = "NGN"
         }, ct);
         Assert.Equal(HttpStatusCode.Created, createdResponse.StatusCode);
         using var created = JsonDocument.Parse(await createdResponse.Content.ReadAsStringAsync(ct));
@@ -116,7 +118,9 @@ public sealed class RunnerVerificationAndOffersTests : IClassFixture<WebApplicat
     {
         using var response = await client.PostAsJsonAsync($"/api/v1/auth/{kind}/register", new
         {
-            displayName = "Test Account", email = $"{Guid.NewGuid():N}@example.com", password = "ValidPass123"
+            displayName = "Test Account",
+            email = $"{Guid.NewGuid():N}@example.com",
+            password = "ValidPass123"
         }, ct);
         Assert.True(response.IsSuccessStatusCode,
             $"Registration failed ({response.StatusCode}): {await response.Content.ReadAsStringAsync(ct)}");

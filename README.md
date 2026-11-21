@@ -62,6 +62,7 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/runners/me/jobs/{id}/decline` | Assigned runner | Declines the job and returns the runner to Available. |
 | POST | `/api/v1/runners/me/jobs/{id}/start-journey` | Assigned runner | Starts travel to the first stop. |
 | GET | `/api/v1/runners/me/earnings` | Runner | Returns available balance and ledger transactions. |
+| GET | `/api/v1/runners/me/payout-banks` | Runner | Returns active Nigerian NGN banks from Paystack. |
 | GET/PUT | `/api/v1/runners/me/payout-account` | Verified runner | Reads or verifies tokenized Nigerian bank details. |
 | POST | `/api/v1/runners/me/payouts` | Verified runner | Submits an idempotent Paystack withdrawal. |
 | POST | `/api/v1/payments/webhooks/paystack` | Signed Paystack request | Reconciles successful, failed, and reversed runner transfers. |

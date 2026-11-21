@@ -424,6 +424,9 @@ if (app.Environment.IsDevelopment())
             .MigrateAsync();
     }
 
+    await DevelopmentTestRunnerSeeder.VerifyConfiguredRunner(
+        app.Services, builder.Configuration, Log.Logger);
+
     // Enable OpenAPI and Swagger documentation during development.
     app.MapOpenApi();
     app.UseSwagger();
@@ -1114,6 +1117,12 @@ runnerApi.MapGet("/payout-account", async (RunnerFinanceService service, Cancell
     .WithSummary("Get masked payout account")
     .Produces<PayoutAccountDetails>()
     .ProducesProblem(StatusCodes.Status404NotFound);
+
+runnerApi.MapGet("/payout-banks", async (RunnerFinanceService service, CancellationToken ct) =>
+        Results.Ok(await service.Banks(ct)))
+    .WithSummary("List Nigerian banks available for runner payouts")
+    .WithDescription("Returns Paystack's active NGN NUBAN banks. Use the selected bank code when saving the payout account.")
+    .Produces<IReadOnlyList<PayoutBank>>();
 
 runnerApi.MapPut("/payout-account", async (SetPayoutAccount request, RunnerFinanceService service, CancellationToken ct) =>
         Results.Ok(await service.SetAccount(request, ct)))

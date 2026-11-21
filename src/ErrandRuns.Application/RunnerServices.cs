@@ -72,29 +72,35 @@ public sealed class RunnerFinanceService(
     ICurrentUser current,
     IClock clock)
 {
+    public Task<IReadOnlyList<PayoutBank>> Banks(CancellationToken ct) => gateway.ListBanks(ct);
+
     public async Task<PayoutAccountDetails?> GetAccount(CancellationToken ct) =>
         Map(await finance.GetPayoutAccount(current.UserId, ct));
 
     public async Task<PayoutAccountDetails> SetAccount(SetPayoutAccount request, CancellationToken ct)
     {
         await EnsureVerified(ct);
-        if (request.AccountNumber is null || request.AccountNumber.Length is < 10 or > 20 ||
+        if (request.AccountNumber is null || request.AccountNumber.Length != 10 ||
             !request.AccountNumber.All(char.IsDigit))
-            throw new DomainException("A valid account number is required.");
+            throw new DomainException("A valid 10-digit Nigerian account number is required.");
 
+        var bankCode = request.BankCode?.Trim() ?? string.Empty;
+        var bank = (await gateway.ListBanks(ct)).SingleOrDefault(value =>
+            value.Code.Equals(bankCode, StringComparison.OrdinalIgnoreCase))
+            ?? throw new DomainException("Select a valid Nigerian bank.");
         var recipient = await gateway.CreateRecipient(
-            request.BankCode, request.AccountNumber, request.BankName, ct);
+            bank.Code, request.AccountNumber, bank.Name, ct);
         var account = await finance.GetPayoutAccount(current.UserId, ct);
         if (account is null)
         {
-            account = new(current.UserId, request.BankCode, request.BankName,
+            account = new(current.UserId, bank.Code, bank.Name,
                 recipient.AccountName, recipient.AccountNumberLast4,
                 recipient.RecipientCode, request.InstantPayout);
             finance.AddPayoutAccount(account);
         }
         else
         {
-            account.Update(request.BankCode, request.BankName, recipient.AccountName,
+            account.Update(bank.Code, bank.Name, recipient.AccountName,
                 recipient.AccountNumberLast4, recipient.RecipientCode, request.InstantPayout);
         }
         await finance.Save(ct);
