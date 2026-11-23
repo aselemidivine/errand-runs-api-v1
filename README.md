@@ -54,12 +54,17 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | POST | `/api/v1/errands/{id}/stops/{stopId}/start` | Assigned runner | Starts the next pending stop after the runner has begun their journey. |
 | POST | `/api/v1/errands/{id}/stops/{stopId}/complete` | Assigned runner | Completes the active stop. |
 | GET | `/api/v1/runners/me/dashboard` | Runner | Returns status, availability, rating, jobs, and withdrawable balance. |
+| PUT | `/api/v1/runners/me/location` | Verified runner | Publishes the runner's current coordinates for five-minute nearby discovery. |
 | POST | `/api/v1/runners/me/verification/submit` | Runner | Submits an Applicant profile for operational verification. |
 | PUT | `/api/v1/runners/me/availability` | Verified runner | Goes online or offline for matching. |
 | GET | `/api/v1/runners/me/jobs` | Runner | Returns assigned active jobs or completed history. |
 | GET | `/api/v1/runners/me/jobs/{id}` | Assigned runner | Returns route details and expected earnings. |
 | POST | `/api/v1/runners/me/jobs/{id}/accept` | Assigned runner | Accepts the job. |
 | POST | `/api/v1/runners/me/jobs/{id}/decline` | Assigned runner | Declines the job and returns the runner to Available. |
+| GET | `/api/v1/runners/me/offers` | Online runner | Lists paid, unassigned errands ordered by exact distance. |
+| POST | `/api/v1/runners/me/offers/{id}/accept` | Online runner | Atomically accepts an available errand. |
+| POST | `/api/v1/runners/me/offers/{id}/decline` | Online runner | Hides an available errand only for the current runner. |
+| GET | `/api/v1/customers/runners/nearby` | Customer | Lists verified online runners with fresh locations, without exposing coordinates. |
 | POST | `/api/v1/runners/me/jobs/{id}/start-journey` | Assigned runner | Starts travel to the first stop. |
 | GET | `/api/v1/runners/me/earnings` | Runner | Returns available balance and ledger transactions. |
 | GET | `/api/v1/runners/me/payout-banks` | Runner | Returns active Nigerian NGN banks from Paystack. |
@@ -79,6 +84,8 @@ Register or sign in using the authentication endpoints below; both return a JWT 
 | GET | `/health/ready` | None | API and database readiness probe. |
 
 Passwords require at least 8 characters, with uppercase, lowercase, and numeric characters. New runner accounts have an `Applicant` runner status and cannot be matched until the future verification workflow makes them available. Domain-rule failures return RFC 7807 Problem Details with `409`; missing resources return `404`; missing or insufficient credentials return `401` or `403`.
+
+Google sign-in uses `POST /api/v1/auth/google` with `{ "idToken": "...", "role": "Customer" }` (or `Runner`). The API validates Google's signature, issuer, expiry, verified email and configured audience before linking or creating the account, then returns the normal ErrandRuns JWT. Configure every approved Android, iOS and web OAuth client ID under `GoogleAuthentication:ClientIds`; never send or store a Google client secret in the mobile app.
 
 Phone verification uses a six-digit, account-bound challenge. Codes expire after 10 minutes, resend is available after 60 seconds, and five incorrect attempts invalidate the challenge. Development responses contain `developmentCode` for Swagger testing; production sends the code through the configured Termii DND SMS route and never returns it. Saved locations store the map pin, address, optional Google place metadata, landmark, gate/delivery instructions, favorite/default flags, and preferred errand categories. A user can store up to 20 locations and has at most one default home base.
 

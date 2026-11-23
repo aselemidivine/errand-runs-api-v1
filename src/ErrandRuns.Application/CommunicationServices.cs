@@ -26,6 +26,12 @@ public interface IRealtimeCommunications
 public interface INotificationPublisher
 {
     Task Publish(Guid recipientId,NotificationType type,string title,string body,Guid? errandId,CancellationToken ct);
+    async Task PublishMany(IEnumerable<Guid> recipientIds, NotificationType type,
+        string title, string body, Guid? errandId, CancellationToken ct)
+    {
+        foreach (var recipientId in recipientIds.Distinct())
+            await Publish(recipientId, type, title, body, errandId, ct);
+    }
 }
 
 public sealed record NotificationDetails(Guid Id,NotificationType Type,string Title,string Body,Guid? ErrandId,DateTimeOffset CreatedAt,DateTimeOffset? ReadAt);
@@ -43,6 +49,18 @@ public sealed class NotificationService(ICommunicationRepository communications,
 {
     public async Task Publish(Guid recipientId,NotificationType type,string title,string body,Guid? errandId,CancellationToken ct)
     {var value=new UserNotification(Guid.NewGuid(),recipientId,type,title,body,errandId,clock.UtcNow);await communications.AddNotification(value,ct);await communications.Save(ct);await realtime.NotifyUser(recipientId,"notification",Map(value),ct);}
+    public async Task PublishMany(IEnumerable<Guid> recipientIds, NotificationType type,
+        string title, string body, Guid? errandId, CancellationToken ct)
+    {
+        var values = recipientIds.Distinct().Select(recipientId =>
+            new UserNotification(Guid.NewGuid(), recipientId, type, title, body,
+                errandId, clock.UtcNow)).ToList();
+        foreach (var value in values) await communications.AddNotification(value, ct);
+        if (values.Count == 0) return;
+        await communications.Save(ct);
+        foreach (var value in values)
+            await realtime.NotifyUser(value.RecipientId, "notification", Map(value), ct);
+    }
     public async Task<PagedNotifications> List(bool? unreadOnly,int page,int pageSize,CancellationToken ct)
     {page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);var total=await communications.CountNotifications(current.UserId,unreadOnly,ct);var unread=await communications.CountNotifications(current.UserId,true,ct);var values=await communications.ListNotifications(current.UserId,unreadOnly,(page-1)*pageSize,pageSize,ct);return new(values.Select(Map).ToList(),page,pageSize,total,unread);}
     public async Task MarkRead(Guid id,CancellationToken ct){var value=await communications.FindNotification(id,ct)??throw new KeyNotFoundException("Notification not found.");if(value.RecipientId!=current.UserId)throw new UnauthorizedAccessException();value.MarkRead(clock.UtcNow);await communications.Save(ct);}

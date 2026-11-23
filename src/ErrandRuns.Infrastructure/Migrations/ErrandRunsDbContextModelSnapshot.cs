@@ -439,6 +439,26 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.ToTable("RunnerPayoutAccounts", "payments");
                 });
 
+            modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerDeclinedOffer", b =>
+                {
+                    b.Property<Guid>("RunnerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ErrandId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("DeclinedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("RunnerId", "ErrandId");
+
+                    b.HasIndex("ErrandId");
+
+                    b.HasIndex("RunnerId", "DeclinedAt");
+
+                    b.ToTable("RunnerDeclinedOffers", "runners");
+                });
+
             modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerProfile", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -446,6 +466,17 @@ namespace ErrandRuns.Infrastructure.Migrations
 
                     b.Property<int>("CompletedErrands")
                         .HasColumnType("int");
+
+                    b.Property<decimal?>("CurrentLatitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<decimal?>("CurrentLongitude")
+                        .HasPrecision(9, 6)
+                        .HasColumnType("decimal(9,6)");
+
+                    b.Property<DateTimeOffset?>("LocationUpdatedAt")
+                        .HasColumnType("datetimeoffset");
 
                     b.Property<decimal>("Rating")
                         .HasPrecision(3, 2)
@@ -457,6 +488,8 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.HasKey("UserId");
 
                     b.HasIndex("Status");
+
+                    b.HasIndex("Status", "LocationUpdatedAt", "CurrentLatitude", "CurrentLongitude");
 
                     b.ToTable("RunnerProfiles", "runners");
                 });
@@ -991,6 +1024,21 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.Navigation("Items");
 
                     b.Navigation("Stops");
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerDeclinedOffer", b =>
+                {
+                    b.HasOne("ErrandRuns.Domain.Errands.Errand", null)
+                        .WithMany()
+                        .HasForeignKey("ErrandId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ErrandRuns.Domain.Runners.RunnerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("RunnerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerProfile", b =>

@@ -16,10 +16,27 @@ public interface IErrandRepository
     Task<int> CountSearchForCustomer(Guid customerId, string query, CancellationToken ct);
     Task<IReadOnlyList<Errand>> ListAvailableOffers(int take, CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<Errand>>([]);
+    Task<IReadOnlyList<Errand>> ListAvailableOffers(decimal minLatitude,
+        decimal maxLatitude, decimal minLongitude, decimal maxLongitude,
+        int take, CancellationToken ct) => ListAvailableOffers(take, ct);
     void Remove(Errand value);
     Task Save(CancellationToken ct);
 }
-public interface IRunnerRepository { Task<RunnerProfile?> Find(Guid id, CancellationToken ct); Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct); Task Save(CancellationToken ct); }
+public interface IRunnerRepository
+{
+    Task<RunnerProfile?> Find(Guid id, CancellationToken ct);
+    Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct);
+    Task<IReadOnlyList<NearbyRunnerCandidate>> SearchNearby(decimal minLatitude,
+        decimal maxLatitude, decimal minLongitude, decimal maxLongitude,
+        DateTimeOffset locationFreshAfter, int take, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<NearbyRunnerCandidate>>([]);
+    Task<IReadOnlySet<Guid>> DeclinedOfferIds(Guid runnerId, CancellationToken ct) =>
+        Task.FromResult<IReadOnlySet<Guid>>(new HashSet<Guid>());
+    Task<bool> HasDeclinedOffer(Guid runnerId, Guid errandId, CancellationToken ct) =>
+        Task.FromResult(false);
+    void AddDeclinedOffer(RunnerDeclinedOffer decline) { }
+    Task Save(CancellationToken ct);
+}
 public interface IRunnerVerificationRepository
 {
     Task<RunnerVerification?> Find(Guid runnerId, CancellationToken ct);
@@ -90,6 +107,8 @@ public interface IPhoneOtpSender
 // depend directly on the chosen identity provider or persistence technology.
 public sealed record RegisterAccount(string DisplayName, string Email, string Password, string? PhoneNumber = null);
 public sealed record Login(string? EmailOrPhone, string Password, string? Email = null);
+public sealed record GoogleSignIn(string IdToken, string Role);
+public sealed record VerifiedGoogleIdentity(string Subject, string Email, string DisplayName);
 public sealed record ChangePassword(string CurrentPassword, string NewPassword);
 public sealed record DeleteAccountRequest(string CurrentPassword);
 public sealed record UpdateAccount(string DisplayName, string? PhoneNumber, string? Bio);
@@ -128,6 +147,7 @@ public interface IAuthenticationService
     Task<AuthenticationResult> RegisterCustomer(RegisterAccount request, CancellationToken ct);
     Task<AuthenticationResult> RegisterRunner(RegisterAccount request, CancellationToken ct);
     Task<AuthenticationResult> ValidateCredentials(Login request, CancellationToken ct);
+    Task<AuthenticationResult> AuthenticateGoogle(VerifiedGoogleIdentity identity, string role, CancellationToken ct);
     Task<AuthenticationResult> ChangePassword(Guid userId, ChangePassword request, CancellationToken ct);
     Task DeleteAccount(Guid userId, DeleteAccountRequest request, CancellationToken ct);
     Task<AccountDetails?> GetAccount(Guid userId, CancellationToken ct);
@@ -140,6 +160,10 @@ public interface IAuthenticationService
     Task<AuthenticationResult> ResetPassword(ResetPassword request, CancellationToken ct);
     Task<PhoneVerificationChallengeDetails> RequestPhoneVerification(Guid userId, bool includeDevelopmentCode, CancellationToken ct);
     Task<AuthenticationResult> VerifyPhoneNumber(Guid userId, VerifyPhoneNumber request, CancellationToken ct);
+}
+public interface IGoogleIdentityVerifier
+{
+    Task<VerifiedGoogleIdentity?> Verify(string idToken, CancellationToken ct);
 }
 public sealed record InitializeErrandPayment(string PaymentMethod = "card");
 public sealed record PaymentIntent(
@@ -193,7 +217,15 @@ public sealed record ErrandTracking(Guid ErrandId, ErrandStatus Status, int Comp
 public sealed record PagedErrands(IReadOnlyList<ErrandSummary> Items, int PageNumber, int PageSize, int TotalCount, int TotalPages);
 public sealed record ErrandCategoryDetails(ErrandCategory Value, string Name, string Description, bool SupportsItems, bool SupportsPreferredProvider, bool SupportsPrescription);
 public sealed record SetRunnerAvailability(bool Available);
+public sealed record UpdateRunnerLocation(decimal Latitude, decimal Longitude);
 public sealed record RunnerDashboard(RunnerStatus Status, bool IsAvailable, decimal Rating, int CompletedErrands, MoneyDetails AvailableBalance, int ActiveJobs);
+public sealed record NearbyRunnerCandidate(Guid RunnerId, string DisplayName, decimal Latitude,
+    decimal Longitude, decimal Rating, int CompletedErrands, DateTimeOffset LocationUpdatedAt,
+    bool HasProfilePicture);
+public sealed record NearbyRunnerSummary(Guid RunnerId, string DisplayName, decimal DistanceKm,
+    decimal Rating, int CompletedErrands, DateTimeOffset LocationUpdatedAt, string? ProfilePictureUrl);
+public sealed record PagedNearbyRunners(IReadOnlyList<NearbyRunnerSummary> Items, int Page,
+    int PageSize, int TotalCount, int TotalPages);
 public sealed record RunnerJobSummary(Guid Id, string Title, ErrandCategory Category, ErrandStatus Status, int StopCount, MoneyDetails ExpectedEarnings, DateTimeOffset? ScheduledFor);
 public sealed record PagedRunnerJobs(IReadOnlyList<RunnerJobSummary> Items, int Page, int PageSize, int TotalCount, int TotalPages);
 public sealed record RunnerJobDetails(ErrandDetails Errand, MoneyDetails ExpectedEarnings);

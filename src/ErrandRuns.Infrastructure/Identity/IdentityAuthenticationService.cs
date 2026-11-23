@@ -45,6 +45,58 @@ public sealed class IdentityAuthenticationService(
         return AuthenticationResult.Success(await ToAccount(user, ct));
     }
 
+    public async Task<AuthenticationResult> AuthenticateGoogle(
+        VerifiedGoogleIdentity identity, string role, CancellationToken ct)
+    {
+        role = role?.Trim() ?? string.Empty;
+        if (role is not ("Customer" or "Runner"))
+            return AuthenticationResult.Failure("Role must be Customer or Runner.");
+
+        var login = new UserLoginInfo("Google", identity.Subject, "Google");
+        var user = await users.FindByLoginAsync(login.LoginProvider, login.ProviderKey);
+        if (user is not null)
+        {
+            if (!await users.IsInRoleAsync(user, role))
+                return AuthenticationResult.Failure("This Google account is registered with a different ErrandRuns role.");
+            return AuthenticationResult.Success(await ToAccount(user, ct));
+        }
+
+        user = await users.FindByEmailAsync(identity.Email);
+        if (user is not null)
+        {
+            if (!await users.IsInRoleAsync(user, role))
+                return AuthenticationResult.Failure("This email is registered with a different ErrandRuns role.");
+            var linked = await users.AddLoginAsync(user, login);
+            return linked.Succeeded
+                ? AuthenticationResult.Success(await ToAccount(user, ct))
+                : Failure(linked);
+        }
+
+        var roleResult = await EnsureRole(role);
+        if (!roleResult.Succeeded) return Failure(roleResult);
+        user = new ApplicationUser(identity.DisplayName, identity.Email) { EmailConfirmed = true };
+        var created = await users.CreateAsync(user);
+        if (!created.Succeeded) return Failure(created);
+        var roleAdded = await users.AddToRoleAsync(user, role);
+        if (!roleAdded.Succeeded)
+        {
+            await users.DeleteAsync(user);
+            return Failure(roleAdded);
+        }
+        var loginAdded = await users.AddLoginAsync(user, login);
+        if (!loginAdded.Succeeded)
+        {
+            await users.DeleteAsync(user);
+            return Failure(loginAdded);
+        }
+        if (role == "Runner")
+        {
+            db.Runners.Add(new RunnerProfile(user.Id));
+            await db.SaveChangesAsync(ct);
+        }
+        return AuthenticationResult.Success(await ToAccount(user, ct));
+    }
+
     public async Task<AuthenticationResult> ChangePassword(Guid userId, ChangePassword request, CancellationToken ct)
     {
         var user = await users.FindByIdAsync(userId.ToString());

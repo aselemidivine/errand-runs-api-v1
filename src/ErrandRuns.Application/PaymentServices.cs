@@ -8,6 +8,7 @@ namespace ErrandRuns.Application;
 public sealed class CustomerPaymentService(
     IPaymentRepository payments,
     IErrandRepository errands,
+    IRunnerRepository runners,
     IPaymentGateway gateway,
     IAuthenticationService accounts,
     INotificationPublisher notifications,
@@ -140,6 +141,7 @@ public sealed class CustomerPaymentService(
                 "Your errand payment was confirmed and runner matching can begin.",
                 payment.ErrandId,
                 ct);
+            await NotifyNearbyRunners(errand, ct);
         }
         else if (result.IsFinalFailure)
         {
@@ -149,6 +151,27 @@ public sealed class CustomerPaymentService(
                 "Payment not completed", "The payment was not completed. Try another payment method.",
                 payment.ErrandId, ct);
         }
+    }
+
+    private async Task NotifyNearbyRunners(Errand errand, CancellationToken ct)
+    {
+        if (errand.Stops.Count == 0) return;
+        const decimal radiusKm = 25m;
+        var first = errand.Stops.OrderBy(stop => stop.Sequence).First().Location;
+        var latitudeDelta = radiusKm / 111.32m;
+        var longitudeScale = Math.Max(0.01m,
+            (decimal)Math.Cos((double)first.Latitude * Math.PI / 180d));
+        var longitudeDelta = radiusKm / (111.32m * longitudeScale);
+        var candidates = await runners.SearchNearby(first.Latitude - latitudeDelta,
+            first.Latitude + latitudeDelta, first.Longitude - longitudeDelta,
+            first.Longitude + longitudeDelta, clock.UtcNow - TimeSpan.FromMinutes(5), 500, ct);
+        var recipients = candidates.Where(runner => RunnerOfferService.Distance(
+                first.Latitude, first.Longitude, runner.Latitude, runner.Longitude) <= radiusKm)
+            .Select(runner => runner.RunnerId);
+        await notifications.PublishMany(recipients, NotificationType.NewAssignment,
+            "New errand near you",
+            $"{errand.Title} is available nearby. Review the route and earnings before accepting.",
+            errand.Id, ct);
     }
 
     private async Task<Errand> OwnedErrand(Guid id, CancellationToken ct)

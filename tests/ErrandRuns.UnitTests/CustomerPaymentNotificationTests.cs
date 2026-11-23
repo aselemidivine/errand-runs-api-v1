@@ -3,6 +3,7 @@ using ErrandRuns.Domain.Common;
 using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Errands;
 using ErrandRuns.Domain.Payments;
+using ErrandRuns.Domain.Runners;
 
 namespace ErrandRuns.UnitTests;
 
@@ -24,7 +25,7 @@ public sealed class CustomerPaymentNotificationTests
         var notifications = new RecordingNotifications();
         var service = new CustomerPaymentService(
             new PaymentRepository(payment), new ErrandRepository(errand),
-            new SuccessfulGateway(), null!, notifications, null!, new TestClock());
+            new EmptyRunners(), new SuccessfulGateway(), null!, notifications, null!, new TestClock());
 
         await service.ReconcileSuccessfulCharge(payment.ProviderReference, CancellationToken.None);
         await service.ReconcileSuccessfulCharge(payment.ProviderReference, CancellationToken.None);
@@ -78,6 +79,15 @@ public sealed class CustomerPaymentNotificationTests
         public Task<PaymentVerification> Verify(string reference, Money expectedAmount,
             CancellationToken ct) => Task.FromResult(new PaymentVerification(
                 reference, "success", expectedAmount.Amount, expectedAmount.Currency));
+    }
+
+    private sealed class EmptyRunners : IRunnerRepository
+    {
+        public Task<RunnerProfile?> Find(Guid id, CancellationToken ct) =>
+            Task.FromResult<RunnerProfile?>(null);
+        public Task<IReadOnlyList<RunnerProfile>> Available(CancellationToken ct) =>
+            Task.FromResult<IReadOnlyList<RunnerProfile>>([]);
+        public Task Save(CancellationToken ct) => Task.CompletedTask;
     }
 
     private sealed class RecordingNotifications : INotificationPublisher

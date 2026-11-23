@@ -7,6 +7,7 @@ Copy `.env.example` to `.env` for local development. Docker Compose translates t
 | Location discovery | Google Maps Platform | `GoogleMaps` | Places Autocomplete (New), Place Details (New), reverse geocoding |
 | Approximate IP location | ipapi.co | `IpGeolocation` | optional city-level onboarding hint |
 | Payments and payouts | Paystack | `ExternalServices:Paystack` | checkout, server verification, bank list/transfers, signed webhooks |
+| User authentication | Google OpenID Connect | `GoogleAuthentication` | customer/runner registration and sign-in with a verified Google ID token |
 | Email | SendGrid | `ExternalServices:SendGrid` | verification, receipts, security and status notices |
 | SMS/OTP | Termii | `ExternalServices:Termii` | Nigerian SMS OTP and time-sensitive notifications |
 | KYC | Smile Identity | `ExternalServices:SmileIdentity` | runner identity checks and signed callbacks |
@@ -15,6 +16,15 @@ Copy `.env.example` to `.env` for local development. Docker Compose translates t
 | Telemetry | OTLP-compatible collector | `ExternalServices:OpenTelemetry` | traces and metrics export |
 
 All integrations are disabled by default. Set the provider's `Enabled` value to `true` only after supplying its required credentials. Startup validation rejects enabled but incomplete configurations.
+
+For Google sign-in, create a separate OAuth client in Google Cloud for every platform you ship. Configure the consent screen and request only `openid`, `email`, and `profile`. Put the resulting client IDs—not client secrets—in the backend configuration:
+
+```text
+GOOGLE_AUTH_ENABLED=true
+GOOGLE_OAUTH_CLIENT_IDS=android-client.apps.googleusercontent.com,ios-client.apps.googleusercontent.com,web-client.apps.googleusercontent.com
+```
+
+The mobile client obtains an ID token from Google and posts it with the intended immutable ErrandRuns role to `/api/v1/auth/google`. Production traffic must use HTTPS.
 
 ASP.NET Core maps double underscores in environment variable names to nested configuration. For example:
 

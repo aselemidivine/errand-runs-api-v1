@@ -15,8 +15,9 @@ public static class DevelopmentTestRunnerSeeder
         if (string.IsNullOrWhiteSpace(email)) return;
 
         await using var scope = services.CreateAsyncScope();
-        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var db = scope.ServiceProvider.GetRequiredService<ErrandRunsDbContext>();
+        if (db.Database.IsInMemory()) return;
+        var users = scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
         var user = await users.FindByEmailAsync(email);
         if (user is null)
         {

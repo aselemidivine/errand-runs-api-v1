@@ -9,7 +9,8 @@ public sealed class RunnerService(
     IErrandRepository errands,
     IRunnerFinanceRepository finance,
     RunnerCompensationPolicy compensation,
-    ICurrentUser current)
+    ICurrentUser current,
+    IClock clock)
 {
     public async Task<RunnerDashboard> Dashboard(CancellationToken ct)
     {
@@ -24,6 +25,14 @@ public sealed class RunnerService(
     {
         var runner = await Profile(ct);
         runner.SetAvailable(available);
+        await runners.Save(ct);
+        return await Dashboard(ct);
+    }
+
+    public async Task<RunnerDashboard> UpdateLocation(UpdateRunnerLocation request, CancellationToken ct)
+    {
+        var runner = await Profile(ct);
+        runner.UpdateLocation(request.Latitude, request.Longitude, clock.UtcNow);
         await runners.Save(ct);
         return await Dashboard(ct);
     }

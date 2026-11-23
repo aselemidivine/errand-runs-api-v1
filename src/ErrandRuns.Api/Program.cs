@@ -103,10 +103,12 @@ builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IUserPreferenceRepository, UserPreferenceRepository>();
 builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
+builder.Services.AddSingleton<IGoogleIdentityVerifier, GoogleIdentityVerifier>();
 builder.Services.AddScoped<ErrandService>();
 builder.Services.AddScoped<RunnerService>();
 builder.Services.AddScoped<RunnerVerificationService>();
 builder.Services.AddScoped<RunnerOfferService>();
+builder.Services.AddScoped<CustomerRunnerDiscoveryService>();
 builder.Services.AddScoped<RunnerFinanceService>();
 builder.Services.AddScoped<CustomerPaymentService>();
 builder.Services.AddScoped<NotificationService>();
@@ -424,8 +426,11 @@ if (app.Environment.IsDevelopment())
             .MigrateAsync();
     }
 
-    await DevelopmentTestRunnerSeeder.VerifyConfiguredRunner(
-        app.Services, builder.Configuration, Log.Logger);
+    if (!databaseProvider.Equals("InMemory", StringComparison.OrdinalIgnoreCase))
+    {
+        await DevelopmentTestRunnerSeeder.VerifyConfiguredRunner(
+            app.Services, builder.Configuration, Log.Logger);
+    }
 
     // Enable OpenAPI and Swagger documentation during development.
     app.MapOpenApi();
@@ -575,14 +580,19 @@ auth.MapPost(
             Login request,
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
+            INotificationPublisher notifications,
             CancellationToken ct) =>
         {
             var result =
                 await accounts.ValidateCredentials(request, ct);
 
-            return result.Succeeded
-                ? Results.Ok(tokens.Issue(result.Account!))
-                : Results.Problem(
+            if (result.Succeeded)
+            {
+                await notifications.Publish(result.Account!.Id, NotificationType.System,
+                    "New sign-in", "Your ErrandRuns account was signed in with your password.", null, ct);
+                return Results.Ok(tokens.Issue(result.Account));
+            }
+            return Results.Problem(
                     statusCode: StatusCodes.Status401Unauthorized,
                     title: "Invalid credentials");
         })
@@ -592,6 +602,30 @@ auth.MapPost(
         "containing its Customer or Runner role.")
     .Produces<AuthenticationResponse>()
     .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .AllowAnonymous();
+
+auth.MapPost(
+        "/google",
+        async (GoogleSignIn request, IGoogleIdentityVerifier google,
+            IAuthenticationService accounts, JwtTokenIssuer tokens,
+            INotificationPublisher notifications, CancellationToken ct) =>
+        {
+            var identity = await google.Verify(request.IdToken, ct);
+            if (identity is null)
+                return Results.Problem(statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Invalid Google identity token");
+            var result = await accounts.AuthenticateGoogle(identity, request.Role, ct);
+            if (!result.Succeeded) return Results.ValidationProblem(result.Errors);
+            await notifications.Publish(result.Account!.Id, NotificationType.System,
+                "New sign-in", "Your ErrandRuns account was signed in with Google.", null, ct);
+            return Results.Ok(tokens.Issue(result.Account));
+        })
+    .WithSummary("Register or sign in with Google")
+    .WithDescription("Validates a Google OpenID Connect ID token, links or creates the requested Customer/Runner account, and returns an ErrandRuns JWT.")
+    .Produces<AuthenticationResponse>()
+    .ProducesValidationProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status401Unauthorized)
+    .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
     .AllowAnonymous();
 
 // Return information about the currently authenticated account.
@@ -982,6 +1016,14 @@ runnerApi.MapPut("/availability", async (SetRunnerAvailability request, RunnerSe
     .Produces<RunnerDashboard>()
     .ProducesProblem(StatusCodes.Status409Conflict);
 
+runnerApi.MapPut("/location", async (UpdateRunnerLocation request, RunnerService service, CancellationToken ct) =>
+        Results.Ok(await service.UpdateLocation(request, ct)))
+    .WithSummary("Publish the verified runner's current location")
+    .WithDescription("Call while online and when the runner moves materially. Customer discovery ignores locations older than five minutes.")
+    .Produces<RunnerDashboard>()
+    .ProducesProblem(StatusCodes.Status400BadRequest)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
 runnerApi.MapPost("/verification/submit", async (RunnerService service, CancellationToken ct) =>
         Results.Ok(await service.SubmitVerification(ct)))
     .WithSummary("Legacy runner verification submission")
@@ -1066,6 +1108,18 @@ runnerApi.MapPost("/offers/{id:guid}/accept", async (Guid id,
     .WithSummary("Atomically accept an available errand")
     .WithDescription("First verified online runner wins. Row-version concurrency prevents two runners from accepting the same errand.")
     .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status404NotFound)
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
+runnerApi.MapPost("/offers/{id:guid}/decline", async (Guid id,
+        RunnerOfferService service, CancellationToken ct) =>
+    {
+        await service.Decline(id, ct);
+        return Results.NoContent();
+    })
+    .WithSummary("Dismiss an available errand for the current runner")
+    .WithDescription("The decision is persisted per runner and does not remove the offer for other runners.")
+    .Produces(StatusCodes.Status204NoContent)
     .ProducesProblem(StatusCodes.Status404NotFound)
     .ProducesProblem(StatusCodes.Status409Conflict);
 
@@ -1169,6 +1223,20 @@ runnerVerificationAdmin.MapPost("/{runnerId:guid}/reject", async (Guid runnerId,
 var errands = app
     .MapGroup("/api/v1/errands")
     .RequireAuthorization();
+
+var customerRunnerDiscovery = app.MapGroup("/api/v1/customers/runners")
+    .WithTags("Customer runner discovery")
+    .RequireAuthorization(policy => policy.RequireRole("Customer"));
+
+customerRunnerDiscovery.MapGet("/nearby", async (decimal latitude, decimal longitude,
+        decimal? radiusKm, int? page, int? pageSize,
+        CustomerRunnerDiscoveryService service, CancellationToken ct) =>
+        Results.Ok(await service.Nearby(latitude, longitude, radiusKm ?? 15m,
+            page ?? 1, pageSize ?? 20, ct)))
+    .WithSummary("List verified online runners near a customer")
+    .WithDescription("Uses a database bounding-box prefilter and exact Haversine distance. Only runner locations updated in the last five minutes are included; exact coordinates are not disclosed.")
+    .Produces<PagedNearbyRunners>()
+    .ProducesProblem(StatusCodes.Status400BadRequest);
 
 // Return the curated customer categories represented by the mobile UI.
 errands.MapGet(
