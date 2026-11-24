@@ -39,6 +39,7 @@ public sealed class RunnerProfile
         CompletedErrands++;
         Status = RunnerStatus.Available;
     }
+    public void UpdateRating(decimal rating) => Rating = Math.Round(Math.Clamp(rating,0m,5m),2);
 }
 
 public sealed class RunnerDeclinedOffer

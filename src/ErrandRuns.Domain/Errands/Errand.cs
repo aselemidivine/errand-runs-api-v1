@@ -197,6 +197,9 @@ public sealed class Errand
     public decimal ServiceFee { get; private set; }
     public string Currency { get; private set; } = "NGN";
     public byte[] RowVersion { get; private set; } = [];
+    public string? CompletionCodeHash { get; private set; }
+    public DateTimeOffset? CompletionCodeIssuedAt { get; private set; }
+    public int CompletionCodeFailedAttempts { get; private set; }
 
     public IReadOnlyList<ErrandStop> Stops =>
         _stops.OrderBy(x => x.Sequence).ToList();
@@ -334,6 +337,34 @@ public sealed class Errand
         }
 
         Transition(ErrandStatus.Completed);
+        CompletionCodeHash = null;
+    }
+
+    public void IssueCompletionCode(string hash, DateTimeOffset now)
+    {
+        if (Status != ErrandStatus.AwaitingConfirmation)
+            throw new DomainException("The errand is not ready for completion confirmation.");
+        if (string.IsNullOrWhiteSpace(hash) || hash.Length > 128)
+            throw new DomainException("Completion confirmation could not be created.");
+        CompletionCodeHash = hash;
+        CompletionCodeIssuedAt = now;
+        CompletionCodeFailedAttempts = 0;
+    }
+
+    public void RecordInvalidCompletionCode()
+    {
+        if (Status != ErrandStatus.AwaitingConfirmation)
+            throw new DomainException("The errand is not awaiting confirmation.");
+        CompletionCodeFailedAttempts++;
+    }
+
+    public void ConfirmCompletionByRunner(Guid runnerId)
+    {
+        EnsureRunner(runnerId);
+        if (CompletionCodeFailedAttempts >= 5)
+            throw new DomainException("Too many incorrect confirmation attempts. Ask the customer to confirm completion.");
+        Transition(ErrandStatus.Completed);
+        CompletionCodeHash = null;
     }
 
     public void Cancel(Guid actorId)

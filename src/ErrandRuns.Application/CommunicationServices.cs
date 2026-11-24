@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using ErrandRuns.Domain.Communications;
+using ErrandRuns.Domain.Runners;
 
 namespace ErrandRuns.Application;
 
@@ -11,8 +13,11 @@ public interface ICommunicationRepository
     Task<Conversation?> FindConversation(Guid id,CancellationToken ct);
     Task<Conversation?> FindConversationForErrand(Guid errandId,CancellationToken ct);
     Task AddConversation(Conversation value,CancellationToken ct);
+    void TrackNewMessage(ChatMessage message) { }
     Task<IReadOnlyList<Conversation>> ListConversations(Guid userId,int skip,int take,CancellationToken ct);
     Task<int> CountConversations(Guid userId,CancellationToken ct);
+    Task<IReadOnlyList<ConversationParticipantProfile>> GetConversationParticipants(IReadOnlyCollection<Guid> userIds,CancellationToken ct)
+        => Task.FromResult<IReadOnlyList<ConversationParticipantProfile>>([]);
     Task<VoiceCallSession?> FindCall(Guid id,CancellationToken ct);
     Task AddCall(VoiceCallSession value,CancellationToken ct);
     Task Save(CancellationToken ct);
@@ -36,10 +41,12 @@ public interface INotificationPublisher
 
 public sealed record NotificationDetails(Guid Id,NotificationType Type,string Title,string Body,Guid? ErrandId,DateTimeOffset CreatedAt,DateTimeOffset? ReadAt);
 public sealed record PagedNotifications(IReadOnlyList<NotificationDetails> Items,int Page,int PageSize,int TotalCount,int UnreadCount);
-public sealed record SendMessage(string Body);
+public sealed record SendMessage(string Body,Guid? ClientMessageId=null);
 public sealed record MessageDetails(Guid Id,Guid SenderId,string Body,DateTimeOffset SentAt,DateTimeOffset? ReadAt);
-public sealed record ConversationSummary(Guid Id,Guid ErrandId,Guid CustomerId,Guid RunnerId,MessageDetails? LastMessage);
-public sealed record ConversationDetails(Guid Id,Guid ErrandId,Guid CustomerId,Guid RunnerId,IReadOnlyList<MessageDetails> Messages);
+public sealed record ConversationParticipantProfile(Guid UserId,string DisplayName,bool HasProfilePicture,RunnerStatus? RunnerStatus,decimal Rating,int ReviewCount,int? CompletedErrands);
+public sealed record ConversationParticipantDetails(Guid UserId,string DisplayName,string Role,string? ProfilePictureUrl,RunnerStatus? RunnerStatus,decimal Rating,int ReviewCount,int? CompletedErrands);
+public sealed record ConversationSummary(Guid Id,Guid ErrandId,Guid CustomerId,Guid RunnerId,ConversationParticipantDetails Customer,ConversationParticipantDetails Runner,MessageDetails? LastMessage);
+public sealed record ConversationDetails(Guid Id,Guid ErrandId,Guid CustomerId,Guid RunnerId,ConversationParticipantDetails Customer,ConversationParticipantDetails Runner,IReadOnlyList<MessageDetails> Messages,int MessageOffset,int MessageLimit,int MessageTotalCount,bool HasMoreMessages);
 public sealed record PagedConversations(IReadOnlyList<ConversationSummary> Items,int Page,int PageSize,int TotalCount);
 public sealed record StartCall(Guid ConversationId);
 public sealed record EndCall(string? Reason);
@@ -69,20 +76,23 @@ public sealed class NotificationService(ICommunicationRepository communications,
 
 public sealed class MessagingService(ICommunicationRepository communications,IErrandRepository errands,IRealtimeCommunications realtime,INotificationPublisher notifications,ICurrentUser current,IClock clock)
 {
+    private static readonly ConcurrentDictionary<Guid,SemaphoreSlim> SendLocks=new();
     public async Task<ConversationDetails> GetOrCreateForErrand(Guid errandId,CancellationToken ct)
-    {var errand=await errands.Find(errandId,ct)??throw new KeyNotFoundException("Errand not found.");if(errand.RunnerId is not Guid runnerId)throw new Domain.Common.DomainException("A runner must be assigned before messaging starts.");if(current.UserId!=errand.CustomerId&&current.UserId!=runnerId)throw new UnauthorizedAccessException();var value=await communications.FindConversationForErrand(errandId,ct);if(value is null){value=new(Guid.NewGuid(),errandId,errand.CustomerId,runnerId,clock.UtcNow);await communications.AddConversation(value,ct);await communications.Save(ct);}return Map(value);}
+    {var errand=await errands.Find(errandId,ct)??throw new KeyNotFoundException("Errand not found.");if(errand.RunnerId is not Guid runnerId)throw new Domain.Common.DomainException("A runner must be assigned before messaging starts.");if(current.UserId!=errand.CustomerId&&current.UserId!=runnerId)throw new UnauthorizedAccessException();var value=await communications.FindConversationForErrand(errandId,ct);if(value is null){value=new(Guid.NewGuid(),errandId,errand.CustomerId,runnerId,clock.UtcNow);await communications.AddConversation(value,ct);await communications.Save(ct);}return await Details(value,ct);}
     public async Task<PagedConversations> List(int page,int pageSize,CancellationToken ct)
-    {page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);var total=await communications.CountConversations(current.UserId,ct);var values=await communications.ListConversations(current.UserId,(page-1)*pageSize,pageSize,ct);return new(values.Select(Summary).ToList(),page,pageSize,total);}
-    public async Task<ConversationDetails> Get(Guid id,CancellationToken ct)=>Map(await Owned(id,ct));
+    {page=Math.Max(1,page);pageSize=Math.Clamp(pageSize,1,100);var total=await communications.CountConversations(current.UserId,ct);var values=await communications.ListConversations(current.UserId,(page-1)*pageSize,pageSize,ct);var profiles=await Profiles(values,ct);return new(values.Select(x=>Summary(x,profiles)).ToList(),page,pageSize,total);}
+    public async Task<ConversationDetails> Get(Guid id,int offset,int limit,CancellationToken ct)=>await Details(await Owned(id,ct),ct,offset,limit);
     public async Task<MessageDetails> Send(Guid id,SendMessage request,CancellationToken ct)
-    {var conversation=await Owned(id,ct);var message=conversation.Send(Guid.NewGuid(),current.UserId,request.Body,clock.UtcNow);await communications.Save(ct);var result=Map(message);await realtime.NotifyConversation(id,"message",result,ct);var recipient=current.UserId==conversation.CustomerId?conversation.RunnerId:conversation.CustomerId;await notifications.Publish(recipient,NotificationType.Message,"New message",message.Body.Length>120?message.Body[..120]:message.Body,conversation.ErrandId,ct);return result;}
+    {var gate=SendLocks.GetOrAdd(id,_=>new SemaphoreSlim(1,1));await gate.WaitAsync(ct);try{var conversation=await Owned(id,ct);if(request.ClientMessageId is Guid clientId&&conversation.Messages.SingleOrDefault(x=>x.Id==clientId) is{} existing)return Map(existing);var message=conversation.Send(request.ClientMessageId??Guid.NewGuid(),current.UserId,request.Body,clock.UtcNow);communications.TrackNewMessage(message);await communications.Save(ct);var result=Map(message);await realtime.NotifyConversation(id,"message",result,ct);var recipient=current.UserId==conversation.CustomerId?conversation.RunnerId:conversation.CustomerId;await notifications.Publish(recipient,NotificationType.Message,"New message",message.Body.Length>120?message.Body[..120]:message.Body,conversation.ErrandId,ct);return result;}finally{gate.Release();}}
     public async Task MarkRead(Guid id,Guid messageId,CancellationToken ct)
     {var conversation=await Owned(id,ct);var message=conversation.Messages.SingleOrDefault(x=>x.Id==messageId)??throw new KeyNotFoundException("Message not found.");message.MarkRead(current.UserId,clock.UtcNow);await communications.Save(ct);await realtime.NotifyConversation(id,"messageRead",new{conversationId=id,messageId,readAt=message.ReadAt},ct);}
     public async Task EnsureParticipant(Guid id,CancellationToken ct)=>_ = await Owned(id,ct);
     public async Task<Conversation> Owned(Guid id,CancellationToken ct){var value=await communications.FindConversation(id,ct)??throw new KeyNotFoundException("Conversation not found.");if(!value.Includes(current.UserId))throw new UnauthorizedAccessException();return value;}
     private static MessageDetails Map(ChatMessage value)=>new(value.Id,value.SenderId,value.Body,value.SentAt,value.ReadAt);
-    private static ConversationDetails Map(Conversation value)=>new(value.Id,value.ErrandId,value.CustomerId,value.RunnerId,value.Messages.Select(Map).ToList());
-    private static ConversationSummary Summary(Conversation value)=>new(value.Id,value.ErrandId,value.CustomerId,value.RunnerId,value.Messages.LastOrDefault() is{} last?Map(last):null);
+    private async Task<ConversationDetails> Details(Conversation value,CancellationToken ct,int offset=0,int limit=50){offset=Math.Max(0,offset);limit=Math.Clamp(limit,1,100);var profiles=await Profiles([value],ct);var messages=value.Messages;return new(value.Id,value.ErrandId,value.CustomerId,value.RunnerId,Participant(value.CustomerId,"Customer",profiles),Participant(value.RunnerId,"Runner",profiles),messages.Skip(offset).Take(limit).Select(Map).ToList(),offset,limit,messages.Count,offset+limit<messages.Count);}
+    private async Task<IReadOnlyDictionary<Guid,ConversationParticipantProfile>> Profiles(IEnumerable<Conversation> values,CancellationToken ct){var ids=values.SelectMany(x=>new[]{x.CustomerId,x.RunnerId}).Distinct().ToArray();return (await communications.GetConversationParticipants(ids,ct)).ToDictionary(x=>x.UserId);}
+    private static ConversationParticipantDetails Participant(Guid id,string role,IReadOnlyDictionary<Guid,ConversationParticipantProfile> profiles){if(!profiles.TryGetValue(id,out var p))return new(id,"Unknown user",role,null,null,0,0,null);return new(id,p.DisplayName,role,p.HasProfilePicture?$"/api/v1/users/{id:D}/profile-picture":null,p.RunnerStatus,p.Rating,p.ReviewCount,p.CompletedErrands);}
+    private static ConversationSummary Summary(Conversation value,IReadOnlyDictionary<Guid,ConversationParticipantProfile> profiles)=>new(value.Id,value.ErrandId,value.CustomerId,value.RunnerId,Participant(value.CustomerId,"Customer",profiles),Participant(value.RunnerId,"Runner",profiles),value.Messages.LastOrDefault() is{} last?Map(last):null);
 }
 
 public sealed class VoiceCallService(ICommunicationRepository communications,MessagingService messaging,IRealtimeCommunications realtime,INotificationPublisher notifications,ICurrentUser current,IClock clock)

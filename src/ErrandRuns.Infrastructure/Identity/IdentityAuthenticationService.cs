@@ -149,6 +149,8 @@ public sealed class IdentityAuthenticationService(
             .Where(value => value.RecipientId == userId).ToListAsync(ct));
         db.RunnerPayoutAccounts.RemoveRange(await db.RunnerPayoutAccounts
             .Where(value => value.RunnerId == userId).ToListAsync(ct));
+        db.Reviews.RemoveRange(await db.Reviews
+            .Where(value=>value.ReviewerId==userId||value.RevieweeId==userId).ToListAsync(ct));
         await db.SaveChangesAsync(ct);
 
         var result = await users.DeleteAsync(user);
@@ -375,6 +377,9 @@ public sealed class IdentityAuthenticationService(
         var runnerStatus = role == "Runner"
             ? await db.Runners.AsNoTracking().Where(r => r.UserId == user.Id).Select(r => (RunnerStatus?)r.Status).SingleOrDefaultAsync(ct)
             : null;
+        var ratingQuery=db.Reviews.AsNoTracking().Where(x=>x.RevieweeId==user.Id);
+        var reviewCount=await ratingQuery.CountAsync(ct);
+        var rating=reviewCount==0?0m:Math.Round(await ratingQuery.AverageAsync(x=>(decimal)x.Rating,ct),2);
         return new AccountDetails(
             user.Id,
             user.DisplayName,
@@ -388,7 +393,9 @@ public sealed class IdentityAuthenticationService(
             user.ProfilePictureData is null
                 ? null
                 : $"/api/v1/users/{user.Id:D}/profile-picture",
-            user.ProfilePictureUpdatedAt);
+            user.ProfilePictureUpdatedAt,
+            rating,
+            reviewCount);
     }
 
     private static AuthenticationResult Failure(IdentityResult result) =>

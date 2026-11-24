@@ -79,8 +79,24 @@ public sealed class RunnerFinanceTests
         Assert.Equal(2000,await finance.Balance(runnerId,"NGN",ct));
     }
 
+    [Fact]
+    public async Task Runner_confirmation_code_completes_errand_and_credits_earnings()
+    {
+        var ct=TestContext.Current.CancellationToken;var customerId=Guid.NewGuid();var runnerId=Guid.NewGuid();var runner=new RunnerProfile(runnerId);
+        runner.SubmitVerification();runner.Approve();runner.SetAvailable(true);runner.Assign();
+        var errand=new Errand(Guid.NewGuid(),customerId,"Code-confirmed delivery",ErrandCategory.Grocery);
+        var stop=new ErrandStop(Guid.NewGuid(),1,StopType.Delivery,"Customer",new(6.5m,3.3m),null);errand.AddStop(stop);
+        errand.RequestEstimate();errand.SetEstimate(new Money(2500),new Money(0));errand.ConfirmPayment();errand.BeginMatching();errand.AssignRunner(runnerId);errand.Accept(runnerId);errand.StartJourney(runnerId);errand.StartStop(runnerId,stop.Id);errand.CompleteStop(runnerId,stop.Id,DateTimeOffset.UtcNow);errand.IssueCompletionCode("stored-hash",DateTimeOffset.UtcNow);
+        var finance=new FakeFinance();var runners=new FakeRunners(runner);var service=new ErrandService(new FakeErrands(errand),runners,finance,new RunnerMatchingService(runners),new PricingService(),new RunnerCompensationPolicy(80),new FakeNotifications(),new FakeCurrent(runnerId,"Runner"),new FakeClock(),new FakeCompletionCodes());
+
+        var result=await service.ConfirmCompletionWithCode(errand.Id,new("123456"),ct);
+
+        Assert.Equal(ErrandStatus.Completed,result.Status);Assert.Equal(2000,await finance.Balance(runnerId,"NGN",ct));Assert.Equal(RunnerStatus.Available,runner.Status);
+    }
+
     private sealed class FakeCurrent(Guid id,string role):ICurrentUser{public Guid UserId=>id;public bool IsInRole(string value)=>value==role;}
     private sealed class FakeClock:IClock{public DateTimeOffset UtcNow=>DateTimeOffset.UtcNow;}
+    private sealed class FakeCompletionCodes:ICompletionCodeProtector{public CompletionCodeChallenge Generate(Guid id)=>new("123456","stored-hash");public bool Verify(Guid id,string code,string hash)=>code=="123456"&&hash=="stored-hash";}
     private sealed class FakeGateway:IPayoutGateway{public Task<IReadOnlyList<PayoutBank>>ListBanks(CancellationToken ct)=>Task.FromResult<IReadOnlyList<PayoutBank>>([new("GTBank","058","nuban","Nigeria","NGN")]);public Task<PayoutRecipient>CreateRecipient(string b,string a,string n,CancellationToken ct)=>Task.FromResult(new PayoutRecipient("recipient",n,a[^4..]));public Task<PayoutSubmission>Submit(Guid id,Money amount,string code,CancellationToken ct)=>Task.FromResult(new PayoutSubmission("transfer"));}
     private sealed class FakeNotifications:INotificationPublisher{public Task Publish(Guid id,ErrandRuns.Domain.Communications.NotificationType type,string title,string body,Guid? errandId,CancellationToken ct)=>Task.CompletedTask;}
     private sealed class FakeErrands(Errand errand):IErrandRepository

@@ -102,6 +102,7 @@ builder.Services.AddScoped<IRunnerFinanceRepository, RunnerFinanceRepository>();
 builder.Services.AddScoped<IPaymentRepository, PaymentRepository>();
 builder.Services.AddScoped<IUserPreferenceRepository, UserPreferenceRepository>();
 builder.Services.AddScoped<ICommunicationRepository, CommunicationRepository>();
+builder.Services.AddScoped<IReviewRepository, ReviewRepository>();
 builder.Services.AddScoped<IAuthenticationService, IdentityAuthenticationService>();
 builder.Services.AddSingleton<IGoogleIdentityVerifier, GoogleIdentityVerifier>();
 builder.Services.AddScoped<ErrandService>();
@@ -116,6 +117,7 @@ builder.Services.AddScoped<INotificationPublisher>(provider=>provider.GetRequire
 builder.Services.AddScoped<MessagingService>();
 builder.Services.AddScoped<VoiceCallService>();
 builder.Services.AddScoped<UserPreferenceService>();
+builder.Services.AddScoped<ReviewService>();
 builder.Services.AddScoped<LocationDiscoveryService>();
 builder.Services.AddSingleton<IRealtimeCommunications, SignalRCommunications>();
 builder.Services.AddScoped<IRunnerMatchingService, RunnerMatchingService>();
@@ -148,6 +150,7 @@ else builder.Services.AddScoped<IPhoneOtpSender, UnavailablePhoneOtpSender>();
 // Pricing and clock services are stateless, so they can be registered as singletons.
 builder.Services.AddSingleton<IPricingService, PricingService>();
 builder.Services.AddSingleton<IClock, SystemClock>();
+builder.Services.AddSingleton<ICompletionCodeProtector, CompletionCodeProtector>();
 
 // Register JWT token generation and access to the current HTTP request.
 builder.Services.AddSingleton<JwtTokenIssuer>();
@@ -880,10 +883,10 @@ var locationsApi = app.MapGroup("/api/v1/users/me/locations")
     .WithTags("Saved locations")
     .RequireAuthorization();
 
-locationsApi.MapGet("/", async (UserPreferenceService service, CancellationToken ct) =>
-        Results.Ok(await service.List(ct)))
+locationsApi.MapGet("/", async (int? offset,int? limit,UserPreferenceService service, CancellationToken ct) =>
+        Results.Ok(await service.List(offset??0,limit??20,ct)))
     .WithSummary("List the signed-in user's saved locations")
-    .Produces<IReadOnlyList<SavedLocationDetails>>();
+    .Produces<PagedSavedLocations>();
 
 locationsApi.MapGet("/{id:guid}", async (Guid id, UserPreferenceService service, CancellationToken ct) =>
         Results.Ok(await service.Get(id, ct)))
@@ -989,7 +992,7 @@ notificationsApi.MapPost("/{id:guid}/read",async(Guid id,NotificationService ser
 var conversationsApi=app.MapGroup("/api/v1/conversations").WithTags("Messaging").RequireAuthorization();
 conversationsApi.MapGet("/",async(int page,int pageSize,MessagingService service,CancellationToken ct)=>Results.Ok(await service.List(page,pageSize,ct))).WithSummary("List conversations").Produces<PagedConversations>();
 conversationsApi.MapPost("/errands/{errandId:guid}",async(Guid errandId,MessagingService service,CancellationToken ct)=>Results.Ok(await service.GetOrCreateForErrand(errandId,ct))).WithSummary("Open the conversation for an assigned errand").Produces<ConversationDetails>();
-conversationsApi.MapGet("/{id:guid}",async(Guid id,MessagingService service,CancellationToken ct)=>Results.Ok(await service.Get(id,ct))).WithSummary("Get messages in a conversation").Produces<ConversationDetails>();
+conversationsApi.MapGet("/{id:guid}",async(Guid id,int? offset,int? limit,MessagingService service,CancellationToken ct)=>Results.Ok(await service.Get(id,offset??0,limit??50,ct))).WithSummary("Get paginated messages in a conversation").Produces<ConversationDetails>();
 conversationsApi.MapPost("/{id:guid}/messages",async(Guid id,SendMessage request,MessagingService service,CancellationToken ct)=>Results.Created($"/api/v1/conversations/{id}",await service.Send(id,request,ct))).WithSummary("Send a message").Produces<MessageDetails>(StatusCodes.Status201Created);
 conversationsApi.MapPost("/{id:guid}/messages/{messageId:guid}/read",async(Guid id,Guid messageId,MessagingService service,CancellationToken ct)=>{await service.MarkRead(id,messageId,ct);return Results.NoContent();}).WithSummary("Mark a message as read").Produces(StatusCodes.Status204NoContent);
 
@@ -1158,6 +1161,14 @@ runnerApi.MapPost("/jobs/{id:guid}/stops/{stopId:guid}/complete", async (Guid id
     .WithSummary("Complete the active route stop")
     .Produces<ErrandSummary>();
 
+runnerApi.MapPost("/jobs/{id:guid}/confirm-completion", async (Guid id,
+        ConfirmErrandCompletion request, ErrandService service, CancellationToken ct) =>
+        Results.Ok(await service.ConfirmCompletionWithCode(id, request, ct)))
+    .WithSummary("Complete a delivered errand using the customer's six-digit code")
+    .WithDescription("Five incorrect attempts lock code confirmation; customer confirmation remains available as a fallback. Successful completion credits runner earnings exactly once.")
+    .Produces<ErrandSummary>()
+    .ProducesProblem(StatusCodes.Status409Conflict);
+
 runnerApi.MapGet("/earnings", async (int page, int pageSize, RunnerFinanceService service, CancellationToken ct) =>
         Results.Ok(await service.Earnings(page, pageSize, ct)))
     .WithSummary("Get available balance and transaction history")
@@ -1218,6 +1229,22 @@ runnerVerificationAdmin.MapPost("/{runnerId:guid}/reject", async (Guid runnerId,
         Results.Ok(await service.Reject(runnerId, request.Reason, ct)))
     .WithSummary("Reject runner verification with a reason")
     .Produces<RunnerVerificationDetails>();
+
+app.MapGet("/api/v1/errands/{id:guid}/participants", async (Guid id, ErrandService service, IAuthenticationService accounts, CancellationToken ct) =>
+    Results.Ok(await service.GetParticipants(id, accounts, ct)))
+    .RequireAuthorization(policy => policy.RequireRole("Customer", "Runner"))
+    .WithSummary("Get the customer and assigned runner for your errand")
+    .Produces<ErrandParticipants>();
+
+var reviewsApi=app.MapGroup("/api/v1").WithTags("Ratings and reviews").RequireAuthorization();
+reviewsApi.MapPost("/errands/{errandId:guid}/reviews",async(Guid errandId,SubmitReview request,ReviewService service,CancellationToken ct)=>Results.Created($"/api/v1/users/me/reviews",await service.Submit(errandId,request,ct)))
+    .WithSummary("Rate and review the other participant after a completed errand")
+    .WithDescription("Customers review their runner; runners review their customer. Each participant may submit one review per completed errand.")
+    .Produces<ReviewDetails>(StatusCodes.Status201Created).ProducesProblem(StatusCodes.Status409Conflict);
+reviewsApi.MapGet("/users/{userId:guid}/rating",async(Guid userId,ReviewService service,CancellationToken ct)=>Results.Ok(await service.Rating(userId,ct)))
+    .WithSummary("Get a customer's or runner's aggregate rating").Produces<RatingSummary>();
+reviewsApi.MapGet("/users/{userId:guid}/reviews",async(Guid userId,int? offset,int? limit,ReviewService service,CancellationToken ct)=>Results.Ok(await service.List(userId,offset??0,limit??20,ct)))
+    .WithSummary("List paginated reviews received by a customer or runner").Produces<PagedReviews>();
 
 // Customer-owned errand endpoints.
 var errands = app

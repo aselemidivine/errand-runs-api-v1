@@ -4,6 +4,7 @@ using ErrandRuns.Domain.Errands;
 using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Payments;
 using ErrandRuns.Domain.Runners;
+using ErrandRuns.Domain.Reviews;
 using ErrandRuns.Domain.Users;
 using ErrandRuns.Infrastructure.Identity;
 using Microsoft.AspNetCore.Identity;
@@ -13,7 +14,7 @@ namespace ErrandRuns.Infrastructure;
 
 public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> options) : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
-    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<RunnerVerification> RunnerVerifications => Set<RunnerVerification>(); public DbSet<RunnerDeclinedOffer> RunnerDeclinedOffers => Set<RunnerDeclinedOffer>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>(); public DbSet<SavedLocation> SavedLocations => Set<SavedLocation>(); public DbSet<PhoneVerificationChallenge> PhoneVerificationChallenges => Set<PhoneVerificationChallenge>();
+    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<RunnerVerification> RunnerVerifications => Set<RunnerVerification>(); public DbSet<RunnerDeclinedOffer> RunnerDeclinedOffers => Set<RunnerDeclinedOffer>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>(); public DbSet<SavedLocation> SavedLocations => Set<SavedLocation>(); public DbSet<PhoneVerificationChallenge> PhoneVerificationChallenges => Set<PhoneVerificationChallenge>(); public DbSet<ErrandReview> Reviews => Set<ErrandReview>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -30,7 +31,7 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<PhoneVerificationChallenge>(e => { e.ToTable("PhoneVerificationChallenges", "identity"); e.HasKey(x => x.Id); e.Property(x => x.PhoneNumber).HasMaxLength(32); e.HasIndex(x => new { x.UserId, x.SentAt }); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
         b.Entity<SavedLocation>(e => { e.ToTable("SavedLocations", "identity"); e.HasKey(x => x.Id); e.Property(x => x.Label).HasMaxLength(60); e.Property(x => x.Address).HasMaxLength(500); e.Property(x => x.Latitude).HasPrecision(9, 6); e.Property(x => x.Longitude).HasPrecision(9, 6); e.Property(x => x.Landmark).HasMaxLength(240); e.Property(x => x.DeliveryInstructions).HasMaxLength(1000); e.Property(x => x.GooglePlaceId).HasMaxLength(255); e.Property(x => x.AddressComponentsJson).HasMaxLength(16000); e.HasIndex(x => new { x.UserId, x.UpdatedAt }); e.HasIndex(x => new { x.UserId, x.IsDefault }).IsUnique().HasFilter("[IsDefault] = 1"); e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade); e.HasMany(x => x.PreferredCategories).WithOne().HasForeignKey(x => x.SavedLocationId).OnDelete(DeleteBehavior.Cascade); e.Navigation(x => x.PreferredCategories).UsePropertyAccessMode(PropertyAccessMode.Field); });
         b.Entity<SavedLocationCategory>(e => { e.ToTable("SavedLocationCategories", "identity"); e.HasKey(x => new { x.SavedLocationId, x.Category }); });
-        b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
+        b.Entity<Errand>(e => { e.ToTable("Errands"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.PreferredProvider).HasMaxLength(160); e.Property(x => x.SpecialInstructions).HasMaxLength(1000); e.Property(x => x.CompletionCodeHash).HasMaxLength(128); e.Property(x => x.MerchandiseEstimate).HasPrecision(18, 2); e.Property(x => x.ServiceFee).HasPrecision(18, 2); e.Property(x => x.Currency).HasMaxLength(3); e.Ignore(x => x.TotalEstimate); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.CustomerId, x.CreatedAt }); e.OwnsMany(x => x.Stops, s => { s.ToTable("ErrandStops"); s.WithOwner().HasForeignKey("ErrandId"); s.HasKey(x => x.Id); s.HasIndex("ErrandId", nameof(ErrandStop.Sequence)).IsUnique(); s.Property(x => x.Address).HasMaxLength(500); s.OwnsOne(x => x.Location, g => { g.Property(x => x.Latitude).HasPrecision(9, 6); g.Property(x => x.Longitude).HasPrecision(9, 6); }); }); e.OwnsMany(x => x.Items, i => { i.ToTable("ErrandItems"); i.WithOwner().HasForeignKey("ErrandId"); i.HasKey(x => x.Id); i.Property(x => x.Name).HasMaxLength(160); i.Property(x => x.Unit).HasMaxLength(40); i.Property(x => x.EstimatedUnitPrice).HasPrecision(18, 2); }); });
         b.Entity<RunnerProfile>(e => { e.ToTable("RunnerProfiles", "runners"); e.HasKey(x => x.UserId); e.Property(x => x.Rating).HasPrecision(3, 2); e.Property(x => x.CurrentLatitude).HasPrecision(9, 6); e.Property(x => x.CurrentLongitude).HasPrecision(9, 6); e.HasIndex(x => x.Status); e.HasIndex(x => new { x.Status, x.LocationUpdatedAt, x.CurrentLatitude, x.CurrentLongitude }); e.HasOne<ApplicationUser>().WithOne().HasForeignKey<RunnerProfile>(x => x.UserId).OnDelete(DeleteBehavior.Cascade); });
         b.Entity<RunnerDeclinedOffer>(e => { e.ToTable("RunnerDeclinedOffers", "runners"); e.HasKey(x => new { x.RunnerId, x.ErrandId }); e.HasIndex(x => new { x.RunnerId, x.DeclinedAt }); e.HasOne<RunnerProfile>().WithMany().HasForeignKey(x => x.RunnerId).OnDelete(DeleteBehavior.Cascade); e.HasOne<Errand>().WithMany().HasForeignKey(x => x.ErrandId).OnDelete(DeleteBehavior.Cascade); });
         b.Entity<RunnerVerification>(e => { e.ToTable("RunnerVerifications", "runners"); e.HasKey(x => x.RunnerId); e.Property(x => x.IdentityDocumentKey).HasMaxLength(500); e.Property(x => x.VehiclePlateNumber).HasMaxLength(32); e.Property(x => x.VehicleMakeModel).HasMaxLength(160); e.Property(x => x.OwnershipDocumentKey).HasMaxLength(500); e.Property(x => x.RejectionReason).HasMaxLength(500); e.Property(x => x.RowVersion).IsRowVersion(); e.HasIndex(x => new { x.Status, x.SubmittedAt }); e.HasOne<RunnerProfile>().WithOne().HasForeignKey<RunnerVerification>(x => x.RunnerId).OnDelete(DeleteBehavior.Cascade); });
@@ -41,7 +42,18 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<UserNotification>(e => { e.ToTable("Notifications", "notifications"); e.HasKey(x => x.Id); e.Property(x => x.Title).HasMaxLength(160); e.Property(x => x.Body).HasMaxLength(1000); e.HasIndex(x => new { x.RecipientId, x.CreatedAt }); e.HasIndex(x => new { x.RecipientId, x.ReadAt }); });
         b.Entity<Conversation>(e => { e.ToTable("Conversations", "communications"); e.HasKey(x => x.Id); e.HasIndex(x => x.ErrandId).IsUnique(); e.HasIndex(x => x.CustomerId); e.HasIndex(x => x.RunnerId); e.OwnsMany(x => x.Messages, m => { m.ToTable("Messages", "communications"); m.WithOwner().HasForeignKey("ConversationId"); m.HasKey(x => x.Id); m.Property(x => x.Body).HasMaxLength(2000); m.HasIndex("ConversationId", nameof(ChatMessage.SentAt)); }); });
         b.Entity<VoiceCallSession>(e => { e.ToTable("VoiceCalls", "communications"); e.HasKey(x => x.Id); e.Property(x => x.EndReason).HasMaxLength(240); e.HasIndex(x => new { x.ConversationId, x.CreatedAt }); e.HasIndex(x => new { x.CalleeId, x.Status }); });
+        b.Entity<ErrandReview>(e=>{e.ToTable("ErrandReviews","reviews");e.HasKey(x=>x.Id);e.Property(x=>x.Comment).HasMaxLength(1000);e.HasIndex(x=>new{x.ErrandId,x.ReviewerId}).IsUnique();e.HasIndex(x=>new{x.RevieweeId,x.CreatedAt});e.HasOne<Errand>().WithMany().HasForeignKey(x=>x.ErrandId).OnDelete(DeleteBehavior.Cascade);e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.ReviewerId).OnDelete(DeleteBehavior.NoAction);e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.RevieweeId).OnDelete(DeleteBehavior.NoAction);});
     }
+}
+
+public sealed class ReviewRepository(ErrandRunsDbContext db):IReviewRepository
+{
+    public Task<ErrandReview?> Find(Guid errandId,Guid reviewerId,CancellationToken ct)=>db.Reviews.SingleOrDefaultAsync(x=>x.ErrandId==errandId&&x.ReviewerId==reviewerId,ct);
+    public async Task<IReadOnlyList<ReviewListItem>> ListForUser(Guid userId,int skip,int take,CancellationToken ct)=>await db.Reviews.AsNoTracking().Where(x=>x.RevieweeId==userId).Join(db.Users.AsNoTracking(),x=>x.ReviewerId,u=>u.Id,(x,u)=>new ReviewListItem(x.Id,x.ErrandId,x.ReviewerId,u.DisplayName,x.Rating,x.Comment==""?null:x.Comment,x.CreatedAt)).OrderByDescending(x=>x.CreatedAt).Skip(skip).Take(Math.Clamp(take,1,100)).ToListAsync(ct);
+    public Task<int> CountForUser(Guid userId,CancellationToken ct)=>db.Reviews.CountAsync(x=>x.RevieweeId==userId,ct);
+    public async Task<RatingSummary> RatingForUser(Guid userId,CancellationToken ct){var q=db.Reviews.Where(x=>x.RevieweeId==userId);var count=await q.CountAsync(ct);var average=count==0?0m:await q.AverageAsync(x=>(decimal)x.Rating,ct);return new(Math.Round(average,2),count);}
+    public void Add(ErrandReview review)=>db.Reviews.Add(review);
+    public Task Save(CancellationToken ct)=>db.SaveChangesAsync(ct);
 }
 public sealed class ErrandRepository(ErrandRunsDbContext db) : IErrandRepository
 {
@@ -177,6 +189,7 @@ public sealed class UserPreferenceRepository(ErrandRunsDbContext db) : IUserPref
 {
     public Task<int> CountLocations(Guid userId, CancellationToken ct) => db.SavedLocations.CountAsync(x => x.UserId == userId, ct);
     public async Task<IReadOnlyList<SavedLocation>> ListLocations(Guid userId, CancellationToken ct) => await db.SavedLocations.Include(x => x.PreferredCategories).Where(x => x.UserId == userId).OrderByDescending(x => x.IsDefault).ThenByDescending(x => x.IsFavorite).ThenByDescending(x => x.UpdatedAt).ToListAsync(ct);
+    public async Task<IReadOnlyList<SavedLocation>> ListLocations(Guid userId,int skip,int take,CancellationToken ct)=>await db.SavedLocations.AsNoTracking().Include(x=>x.PreferredCategories).Where(x=>x.UserId==userId).OrderByDescending(x=>x.IsDefault).ThenByDescending(x=>x.IsFavorite).ThenByDescending(x=>x.UpdatedAt).Skip(skip).Take(Math.Clamp(take,1,100)).ToListAsync(ct);
     public Task<SavedLocation?> FindLocation(Guid id, CancellationToken ct) => db.SavedLocations.Include(x => x.PreferredCategories).SingleOrDefaultAsync(x => x.Id == id, ct);
     public Task<SavedLocation?> FindDefaultLocation(Guid userId, CancellationToken ct) => db.SavedLocations.Include(x => x.PreferredCategories).SingleOrDefaultAsync(x => x.UserId == userId && x.IsDefault, ct);
     public void AddLocation(SavedLocation location) => db.SavedLocations.Add(location);
@@ -185,6 +198,8 @@ public sealed class UserPreferenceRepository(ErrandRunsDbContext db) : IUserPref
 }
 public sealed class CommunicationRepository(ErrandRunsDbContext db):ICommunicationRepository
 {
+    // Client-generated GUIDs on new owned messages must be inserted, not inferred as existing rows.
+    public void TrackNewMessage(ChatMessage message) => db.Entry(message).State = EntityState.Added;
     public async Task AddNotification(UserNotification value,CancellationToken ct)=>await db.Notifications.AddAsync(value,ct);
     public async Task<IReadOnlyList<UserNotification>> ListNotifications(Guid id,bool? unread,int skip,int take,CancellationToken ct){var q=db.Notifications.AsNoTracking().Where(x=>x.RecipientId==id);if(unread is true)q=q.Where(x=>x.ReadAt==null);if(unread is false)q=q.Where(x=>x.ReadAt!=null);return await q.OrderByDescending(x=>x.CreatedAt).Skip(skip).Take(Math.Min(take,100)).ToListAsync(ct);}
     public Task<int> CountNotifications(Guid id,bool? unread,CancellationToken ct){var q=db.Notifications.Where(x=>x.RecipientId==id);if(unread is true)q=q.Where(x=>x.ReadAt==null);if(unread is false)q=q.Where(x=>x.ReadAt!=null);return q.CountAsync(ct);}
@@ -194,7 +209,21 @@ public sealed class CommunicationRepository(ErrandRunsDbContext db):ICommunicati
     public async Task AddConversation(Conversation value,CancellationToken ct)=>await db.Conversations.AddAsync(value,ct);
     public async Task<IReadOnlyList<Conversation>> ListConversations(Guid id,int skip,int take,CancellationToken ct)=>await db.Conversations.AsNoTracking().Include(x=>x.Messages).Where(x=>x.CustomerId==id||x.RunnerId==id).OrderByDescending(x=>x.CreatedAt).Skip(skip).Take(Math.Min(take,100)).ToListAsync(ct);
     public Task<int> CountConversations(Guid id,CancellationToken ct)=>db.Conversations.CountAsync(x=>x.CustomerId==id||x.RunnerId==id,ct);
+    public async Task<IReadOnlyList<ConversationParticipantProfile>> GetConversationParticipants(IReadOnlyCollection<Guid> ids,CancellationToken ct)
+    {
+        var users=await db.Users.AsNoTracking().Where(x=>ids.Contains(x.Id)).Select(x=>new{x.Id,x.DisplayName,HasProfilePicture=x.ProfilePictureData!=null}).ToListAsync(ct);
+        var runners=await db.Runners.AsNoTracking().Where(x=>ids.Contains(x.UserId)).ToDictionaryAsync(x=>x.UserId,ct);
+        var ratings=await db.Reviews.AsNoTracking().Where(x=>ids.Contains(x.RevieweeId)).GroupBy(x=>x.RevieweeId).Select(x=>new{UserId=x.Key,Rating=x.Average(y=>(decimal)y.Rating),Count=x.Count()}).ToDictionaryAsync(x=>x.UserId,ct);
+        return users.Select(x=>{ratings.TryGetValue(x.Id,out var a);return runners.TryGetValue(x.Id,out var r)?new ConversationParticipantProfile(x.Id,x.DisplayName,x.HasProfilePicture,r.Status,a is null?0:Math.Round(a.Rating,2),a?.Count??0,r.CompletedErrands):new ConversationParticipantProfile(x.Id,x.DisplayName,x.HasProfilePicture,null,a is null?0:Math.Round(a.Rating,2),a?.Count??0,null);}).ToList();
+    }
     public Task<VoiceCallSession?> FindCall(Guid id,CancellationToken ct)=>db.VoiceCalls.SingleOrDefaultAsync(x=>x.Id==id,ct);
     public async Task AddCall(VoiceCallSession value,CancellationToken ct)=>await db.VoiceCalls.AddAsync(value,ct);
-    public Task Save(CancellationToken ct)=>db.SaveChangesAsync(ct);
+    public async Task Save(CancellationToken ct)
+    {
+        try { await db.SaveChangesAsync(ct); }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new ConcurrencyConflictException("This conversation changed while your request was being saved. Retry using the same clientMessageId.");
+        }
+    }
 }

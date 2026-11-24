@@ -8,6 +8,7 @@ public interface IUserPreferenceRepository
 {
     Task<int> CountLocations(Guid userId, CancellationToken ct);
     Task<IReadOnlyList<SavedLocation>> ListLocations(Guid userId, CancellationToken ct);
+    async Task<IReadOnlyList<SavedLocation>> ListLocations(Guid userId,int skip,int take,CancellationToken ct)=>(await ListLocations(userId,ct)).Skip(skip).Take(take).ToList();
     Task<SavedLocation?> FindLocation(Guid id, CancellationToken ct);
     Task<SavedLocation?> FindDefaultLocation(Guid userId, CancellationToken ct);
     void AddLocation(SavedLocation location);
@@ -43,14 +44,15 @@ public sealed record SavedLocationDetails(
     string? AddressComponentsJson,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+public sealed record PagedSavedLocations(IReadOnlyList<SavedLocationDetails> Items,int Offset,int Limit,int TotalCount,bool HasMore);
 
 public sealed class UserPreferenceService(
     IUserPreferenceRepository preferences,
     ICurrentUser current,
     IClock clock)
 {
-    public async Task<IReadOnlyList<SavedLocationDetails>> List(CancellationToken ct) =>
-        (await preferences.ListLocations(current.UserId, ct)).Select(ToDetails).ToArray();
+    public async Task<PagedSavedLocations> List(int offset,int limit,CancellationToken ct)
+    {offset=Math.Max(0,offset);limit=Math.Clamp(limit,1,100);var total=await preferences.CountLocations(current.UserId,ct);var values=await preferences.ListLocations(current.UserId,offset,limit,ct);return new(values.Select(ToDetails).ToArray(),offset,limit,total,offset+limit<total);}
 
     public async Task<IReadOnlyList<SavedLocationDetails>> Search(string query, CancellationToken ct)
     {

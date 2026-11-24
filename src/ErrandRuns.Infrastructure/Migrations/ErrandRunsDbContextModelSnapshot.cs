@@ -144,6 +144,16 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.Property<int>("Category")
                         .HasColumnType("int");
 
+                    b.Property<int>("CompletionCodeFailedAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("CompletionCodeHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<DateTimeOffset?>("CompletionCodeIssuedAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -437,6 +447,44 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.HasKey("RunnerId");
 
                     b.ToTable("RunnerPayoutAccounts", "payments");
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Reviews.ErrandReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Comment")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("ErrandId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Rating")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("RevieweeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ReviewerId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReviewerId");
+
+                    b.HasIndex("ErrandId", "ReviewerId")
+                        .IsUnique();
+
+                    b.HasIndex("RevieweeId", "CreatedAt");
+
+                    b.ToTable("ErrandReviews", "reviews");
                 });
 
             modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerDeclinedOffer", b =>
@@ -1024,6 +1072,27 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.Navigation("Items");
 
                     b.Navigation("Stops");
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Reviews.ErrandReview", b =>
+                {
+                    b.HasOne("ErrandRuns.Domain.Errands.Errand", null)
+                        .WithMany()
+                        .HasForeignKey("ErrandId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("ErrandRuns.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("RevieweeId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("ErrandRuns.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("ReviewerId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("ErrandRuns.Domain.Runners.RunnerDeclinedOffer", b =>
