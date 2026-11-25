@@ -103,6 +103,7 @@ public sealed class IdentityAuthenticationService(
         if (user is null) return AuthenticationResult.Failure("Account was not found.");
 
         var result = await users.ChangePasswordAsync(user, request.CurrentPassword, request.NewPassword);
+        if(result.Succeeded){user.RecordPasswordChanged(clock.UtcNow);await users.UpdateAsync(user);}
         return result.Succeeded
             ? AuthenticationResult.Success(await ToAccount(user, ct))
             : Failure(result);

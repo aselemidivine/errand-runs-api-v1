@@ -114,6 +114,14 @@ public sealed class CustomerPaymentService(
         if (errand is null) return;
         await VerifyAndApply(payment, errand, ct);
     }
+    public async Task<PaymentCallbackResult> ReconcileCallback(string providerReference,CancellationToken ct)
+    {
+        if(string.IsNullOrWhiteSpace(providerReference)||providerReference.Length>160)throw new ArgumentException("A valid payment reference is required.");
+        var payment=await payments.FindByReference(providerReference,ct)??throw new KeyNotFoundException("Payment not found.");
+        var errand=await errands.Find(payment.ErrandId,ct)??throw new KeyNotFoundException("Errand not found.");
+        await VerifyAndApply(payment,errand,ct);
+        return new(payment.Id,payment.ErrandId,payment.Status,payment.ProviderReference);
+    }
 
     private async Task VerifyAndApply(Payment payment, Errand errand, CancellationToken ct)
     {
@@ -234,3 +242,4 @@ public sealed class CustomerPaymentService(
             payment.UpdatedAt);
     }
 }
+public sealed record PaymentCallbackResult(Guid PaymentId,Guid ErrandId,PaymentStatus Status,string ProviderReference);

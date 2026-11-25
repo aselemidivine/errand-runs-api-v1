@@ -25,6 +25,10 @@ public sealed class ApplicationUser : IdentityUser<Guid>
     public byte[]? ProfilePictureData { get; private set; }
     public string? ProfilePictureContentType { get; private set; }
     public DateTimeOffset? ProfilePictureUpdatedAt { get; private set; }
+    public bool SmsTwoFactorEnabled { get; private set; }
+    public DateTimeOffset? PasswordChangedAt { get; private set; }
+    public void SetSmsTwoFactor(bool enabled)=>SmsTwoFactorEnabled=enabled;
+    public void RecordPasswordChanged(DateTimeOffset now)=>PasswordChangedAt=now;
 
     public void UpdateProfile(string displayName, string? phoneNumber, string? bio)
     {

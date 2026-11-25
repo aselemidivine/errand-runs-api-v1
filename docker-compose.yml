@@ -26,6 +26,7 @@ services:
       ExternalServices__Paystack__WebhookSecret: ${PAYSTACK_WEBHOOK_SECRET:-}
       ExternalServices__Paystack__BaseUrl: ${PAYSTACK_BASE_URL:-https://api.paystack.co}
       ExternalServices__Paystack__CallbackUrl: ${PAYSTACK_CALLBACK_URL:-}
+      MobileApp__PaymentRedirectUrl: ${MOBILE_APP_PAYMENT_REDIRECT_URL:-errandruns://payments/result}
       GoogleAuthentication__Enabled: ${GOOGLE_AUTH_ENABLED:-false}
       GoogleAuthentication__ClientIdsCsv: ${GOOGLE_OAUTH_CLIENT_IDS:-}
       ExternalServices__SendGrid__Enabled: ${SENDGRID_ENABLED:-false}

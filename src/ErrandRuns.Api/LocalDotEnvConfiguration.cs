@@ -24,6 +24,7 @@ public static class LocalDotEnvConfiguration
         Apply(configuration, values, "ExternalServices:Paystack:WebhookSecret", "PAYSTACK_WEBHOOK_SECRET");
         Apply(configuration, values, "ExternalServices:Paystack:BaseUrl", "PAYSTACK_BASE_URL");
         Apply(configuration, values, "ExternalServices:Paystack:CallbackUrl", "PAYSTACK_CALLBACK_URL");
+        Apply(configuration, values, "MobileApp:PaymentRedirectUrl", "MOBILE_APP_PAYMENT_REDIRECT_URL");
         // Remove this value when the automatic test verification is no longer needed.
         Apply(configuration, values, "Testing:AutoVerifyRunnerEmail", "TEST_AUTO_VERIFY_RUNNER_EMAIL");
         Apply(configuration, values, "GoogleAuthentication:Enabled", "GOOGLE_AUTH_ENABLED");

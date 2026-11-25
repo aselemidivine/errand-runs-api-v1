@@ -12,6 +12,7 @@ using ErrandRuns.Domain.Common;
 using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Errands;
 using ErrandRuns.Domain.Runners;
+using ErrandRuns.Domain.Security;
 using ErrandRuns.Infrastructure;
 using ErrandRuns.Infrastructure.Configuration;
 using ErrandRuns.Infrastructure.Identity;
@@ -24,6 +25,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -153,7 +155,7 @@ builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<ICompletionCodeProtector, CompletionCodeProtector>();
 
 // Register JWT token generation and access to the current HTTP request.
-builder.Services.AddSingleton<JwtTokenIssuer>();
+builder.Services.AddScoped<JwtTokenIssuer>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUser, HttpCurrentUser>();
 
@@ -183,6 +185,17 @@ builder.Services
 
             // Allow a small amount of clock difference between systems.
             ClockSkew = TimeSpan.FromSeconds(30)
+        };
+        options.Events=new JwtBearerEvents
+        {
+            OnTokenValidated=async context=>
+            {
+                var sid=context.Principal?.FindFirstValue("sid");
+                if(!Guid.TryParse(sid,out var sessionId)){context.Fail("Session claim is missing.");return;}
+                var db=context.HttpContext.RequestServices.GetRequiredService<ErrandRunsDbContext>();
+                var active=await db.AccountSessions.AsNoTracking().AnyAsync(x=>x.Id==sessionId&&x.RevokedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow,context.HttpContext.RequestAborted);
+                if(!active)context.Fail("Session is expired or revoked.");
+            }
         };
         options.Events = new JwtBearerEvents
         {
@@ -472,6 +485,14 @@ app.MapHealthChecks("/health/ready")
     .AllowAnonymous();
 
 // Reconcile asynchronous Paystack transfer outcomes using the signed raw payload.
+app.MapGet("/api/v1/payments/paystack/callback",async(string? reference,string? trxref,IConfiguration configuration,CustomerPaymentService payments,CancellationToken ct)=>
+{
+    var paymentReference=reference??trxref??string.Empty;var target=configuration["MobileApp:PaymentRedirectUrl"];
+    if(string.IsNullOrWhiteSpace(target)||!Uri.TryCreate(target,UriKind.Absolute,out var redirect)||redirect.Scheme is not ("https" or "errandruns"))throw new InvalidOperationException("MobileApp:PaymentRedirectUrl must be an HTTPS or errandruns deep link.");
+    try{var result=await payments.ReconcileCallback(paymentReference,ct);var url=QueryHelpers.AddQueryString(target,new Dictionary<string,string?>{{"status",result.Status.ToString().ToLowerInvariant()},{"reference",result.ProviderReference},{"paymentId",result.PaymentId.ToString()},{"errandId",result.ErrandId.ToString()}});return Results.Redirect(url,false);}
+    catch(Exception error) when(error is ArgumentException or KeyNotFoundException or DomainException or ExternalServiceException){var url=QueryHelpers.AddQueryString(target,new Dictionary<string,string?>{{"status","failed"},{"reference",paymentReference}});return Results.Redirect(url,false);}
+}).WithTags("Payments").WithSummary("Verify Paystack checkout and redirect into the ErrandRuns app").WithDescription("The reference is verified server-to-server. Visiting this URL alone never confirms payment.").AllowAnonymous();
+
 app.MapPost("/api/v1/payments/webhooks/paystack", async (
         HttpRequest request,
         IConfiguration configuration,
@@ -479,10 +500,13 @@ app.MapPost("/api/v1/payments/webhooks/paystack", async (
         CustomerPaymentService customerPayments,
         CancellationToken ct) =>
     {
-        var secret = configuration["ExternalServices:Paystack:SecretKey"];
-        if (string.IsNullOrWhiteSpace(secret))
-            secret = configuration["ExternalServices:Paystack:WebhookSecret"];
-        var signature = request.Headers["x-paystack-signature"].ToString();
+        var secret = configuration["ExternalServices:Paystack:WebhookSecret"];
+        var signature = request.Headers["Paystack-Signature"].ToString();
+        if(string.IsNullOrWhiteSpace(signature))
+        {
+            signature=request.Headers["x-paystack-signature"].ToString();
+            if(string.IsNullOrWhiteSpace(secret))secret=configuration["ExternalServices:Paystack:SecretKey"];
+        }
         if (string.IsNullOrWhiteSpace(secret) || string.IsNullOrWhiteSpace(signature))
             return Results.Unauthorized();
         using var reader = new StreamReader(request.Body, Encoding.UTF8);
@@ -522,7 +546,7 @@ auth.MapPost(
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
             INotificationPublisher notifications,
-            CancellationToken ct) =>
+            HttpContext httpContext,CancellationToken ct) =>
         {
             var result =
                 await accounts.RegisterCustomer(request, ct);
@@ -533,7 +557,7 @@ auth.MapPost(
             return result.Succeeded
                 ? Results.Created(
                     "/api/v1/auth/me",
-                    tokens.Issue(result.Account!))
+                    await tokens.Issue(result.Account!,httpContext))
                 : Results.ValidationProblem(result.Errors);
         })
     .WithSummary("Register a customer account")
@@ -553,7 +577,7 @@ auth.MapPost(
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
             INotificationPublisher notifications,
-            CancellationToken ct) =>
+            HttpContext httpContext,CancellationToken ct) =>
         {
             var result =
                 await accounts.RegisterRunner(request, ct);
@@ -564,7 +588,7 @@ auth.MapPost(
             return result.Succeeded
                 ? Results.Created(
                     "/api/v1/auth/me",
-                    tokens.Issue(result.Account!))
+                    await tokens.Issue(result.Account!,httpContext))
                 : Results.ValidationProblem(result.Errors);
         })
     .WithSummary("Register a runner account")
@@ -584,16 +608,35 @@ auth.MapPost(
             IAuthenticationService accounts,
             JwtTokenIssuer tokens,
             INotificationPublisher notifications,
-            CancellationToken ct) =>
+            UserManager<ApplicationUser> users,
+            ErrandRunsDbContext db,
+            IPhoneOtpSender otp,
+            IClock clock,
+            IConfiguration configuration,
+            HttpContext httpContext,CancellationToken ct) =>
         {
             var result =
                 await accounts.ValidateCredentials(request, ct);
 
             if (result.Succeeded)
             {
+                var user=await users.FindByIdAsync(result.Account!.Id.ToString())??throw new UnauthorizedAccessException();
+                if(user.TwoFactorEnabled||user.SmsTwoFactorEnabled)
+                {
+                    var method=request.TwoFactorMethod?.Trim().ToLowerInvariant();
+                    method=method=="sms"&&user.SmsTwoFactorEnabled?"sms":user.TwoFactorEnabled?"authenticator":"sms";
+                    var challengeId=Guid.NewGuid();string? developmentCode=null;string? hash=null;
+                    if(method=="sms")
+                    {
+                        if(!user.PhoneNumberConfirmed||string.IsNullOrWhiteSpace(user.PhoneNumber))throw new DomainException("SMS authentication requires a verified phone number.");
+                        var code=RandomNumberGenerator.GetInt32(100000,1000000).ToString();hash=SecurityCode.Hash(configuration,challengeId,code);await otp.Send(user.PhoneNumber,code,ct);if(app.Environment.IsDevelopment())developmentCode=code;
+                    }
+                    var challenge=new LoginChallenge(challengeId,user.Id,method,hash,clock.UtcNow,clock.UtcNow.AddMinutes(5));db.LoginChallenges.Add(challenge);await db.SaveChangesAsync(ct);
+                    return Results.Accepted(value:new TwoFactorRequired(challenge.Id,method,challenge.ExpiresAt,developmentCode));
+                }
                 await notifications.Publish(result.Account!.Id, NotificationType.System,
                     "New sign-in", "Your ErrandRuns account was signed in with your password.", null, ct);
-                return Results.Ok(tokens.Issue(result.Account));
+                return Results.Ok(await tokens.Issue(result.Account,httpContext));
             }
             return Results.Problem(
                     statusCode: StatusCodes.Status401Unauthorized,
@@ -607,11 +650,46 @@ auth.MapPost(
     .ProducesProblem(StatusCodes.Status401Unauthorized)
     .AllowAnonymous();
 
+auth.MapPost("/login/2fa",async(VerifyLoginTwoFactor request,HttpContext context,ErrandRunsDbContext db,UserManager<ApplicationUser> users,IAuthenticationService accounts,JwtTokenIssuer tokens,IClock clock,IConfiguration configuration,CancellationToken ct)=>
+{
+    var challenge=await db.LoginChallenges.SingleOrDefaultAsync(x=>x.Id==request.ChallengeId,ct)??throw new UnauthorizedAccessException("Login challenge is invalid.");
+    if(!challenge.CanUse(clock.UtcNow))throw new UnauthorizedAccessException("Login challenge is expired or locked.");
+    var user=await users.FindByIdAsync(challenge.UserId.ToString())??throw new UnauthorizedAccessException();
+    var valid=challenge.Method=="authenticator"?await users.VerifyTwoFactorTokenAsync(user,TokenOptions.DefaultAuthenticatorProvider,request.Code):SecurityCode.Verify(configuration,challenge.Id,request.Code,challenge.CodeHash);
+    if(!valid){challenge.Fail();await db.SaveChangesAsync(ct);throw new UnauthorizedAccessException("Two-factor code is incorrect.");}
+    challenge.Use(clock.UtcNow);await db.SaveChangesAsync(ct);var account=await accounts.GetAccount(user.Id,ct)??throw new UnauthorizedAccessException();return Results.Ok(await tokens.Issue(account,context,ct));
+}).WithSummary("Complete a password login with SMS or authenticator code").Produces<AuthenticationResponse>().ProducesProblem(StatusCodes.Status401Unauthorized).AllowAnonymous();
+
+auth.MapGet("/security",async(ICurrentUser current,UserManager<ApplicationUser> users,CancellationToken ct)=>
+{
+    var user=await users.FindByIdAsync(current.UserId.ToString())??throw new KeyNotFoundException();return Results.Ok(new SecuritySettings(user.SmsTwoFactorEnabled,user.TwoFactorEnabled,user.PasswordChangedAt));
+}).WithSummary("Get login and two-factor security settings").Produces<SecuritySettings>().RequireAuthorization();
+
+auth.MapPost("/security/authenticator/setup",async(ICurrentUser current,UserManager<ApplicationUser> users,CancellationToken ct)=>
+{
+    var user=await users.FindByIdAsync(current.UserId.ToString())??throw new KeyNotFoundException();await users.ResetAuthenticatorKeyAsync(user);var key=await users.GetAuthenticatorKeyAsync(user)??throw new InvalidOperationException();var issuer=Uri.EscapeDataString("ErrandRuns");var account=Uri.EscapeDataString(user.Email??user.Id.ToString());return Results.Ok(new AuthenticatorSetup(key,$"otpauth://totp/{issuer}:{account}?secret={key}&issuer={issuer}&digits=6"));
+}).WithSummary("Create a new authenticator-app secret").Produces<AuthenticatorSetup>().RequireAuthorization();
+
+auth.MapPost("/security/authenticator/enable",async(EnableAuthenticator request,ICurrentUser current,UserManager<ApplicationUser> users,CancellationToken ct)=>
+{
+    var user=await users.FindByIdAsync(current.UserId.ToString())??throw new KeyNotFoundException();if(!await users.VerifyTwoFactorTokenAsync(user,TokenOptions.DefaultAuthenticatorProvider,request.Code))throw new DomainException("Authenticator code is incorrect.");await users.SetTwoFactorEnabledAsync(user,true);var codes=await users.GenerateNewTwoFactorRecoveryCodesAsync(user,10);return Results.Ok(new RecoveryCodes(codes?.ToArray()??[]));
+}).WithSummary("Verify and enable authenticator-app 2FA").Produces<RecoveryCodes>().RequireAuthorization();
+
+auth.MapPut("/security/sms",async(SetSmsTwoFactor request,ICurrentUser current,UserManager<ApplicationUser> users,CancellationToken ct)=>
+{
+    var user=await users.FindByIdAsync(current.UserId.ToString())??throw new KeyNotFoundException();if(!await users.CheckPasswordAsync(user,request.CurrentPassword))throw new UnauthorizedAccessException("Current password is incorrect.");if(request.Enabled&&!user.PhoneNumberConfirmed)throw new DomainException("Verify your phone number before enabling SMS authentication.");user.SetSmsTwoFactor(request.Enabled);await users.UpdateAsync(user);return Results.NoContent();
+}).WithSummary("Enable or disable SMS two-factor authentication").Produces(StatusCodes.Status204NoContent).RequireAuthorization();
+
+auth.MapDelete("/security/authenticator",async([FromBody] DisableAuthenticator request,ICurrentUser current,UserManager<ApplicationUser> users,CancellationToken ct)=>
+{
+    var user=await users.FindByIdAsync(current.UserId.ToString())??throw new KeyNotFoundException();if(!await users.CheckPasswordAsync(user,request.CurrentPassword))throw new UnauthorizedAccessException("Current password is incorrect.");await users.SetTwoFactorEnabledAsync(user,false);await users.ResetAuthenticatorKeyAsync(user);return Results.NoContent();
+}).WithSummary("Disable authenticator-app 2FA and invalidate its secret").Produces(StatusCodes.Status204NoContent).RequireAuthorization();
+
 auth.MapPost(
         "/google",
         async (GoogleSignIn request, IGoogleIdentityVerifier google,
             IAuthenticationService accounts, JwtTokenIssuer tokens,
-            INotificationPublisher notifications, CancellationToken ct) =>
+            INotificationPublisher notifications,HttpContext httpContext, CancellationToken ct) =>
         {
             var identity = await google.Verify(request.IdToken, ct);
             if (identity is null)
@@ -621,7 +699,7 @@ auth.MapPost(
             if (!result.Succeeded) return Results.ValidationProblem(result.Errors);
             await notifications.Publish(result.Account!.Id, NotificationType.System,
                 "New sign-in", "Your ErrandRuns account was signed in with Google.", null, ct);
-            return Results.Ok(tokens.Issue(result.Account));
+            return Results.Ok(await tokens.Issue(result.Account,httpContext));
         })
     .WithSummary("Register or sign in with Google")
     .WithDescription("Validates a Google OpenID Connect ID token, links or creates the requested Customer/Runner account, and returns an ErrandRuns JWT.")
@@ -630,6 +708,28 @@ auth.MapPost(
     .ProducesProblem(StatusCodes.Status401Unauthorized)
     .ProducesProblem(StatusCodes.Status503ServiceUnavailable)
     .AllowAnonymous();
+
+auth.MapPost("/refresh",async(RefreshAccessToken request,HttpContext context,JwtTokenIssuer tokens,IAuthenticationService accounts,CancellationToken ct)=>Results.Ok(await tokens.Refresh(request.RefreshToken,context,accounts,ct)))
+    .WithSummary("Rotate a refresh token and issue a new device session")
+    .WithDescription("Refresh tokens are single-use, stored only as SHA-256 hashes, and rotated on every call.")
+    .Produces<AuthenticationResponse>().ProducesProblem(StatusCodes.Status401Unauthorized).AllowAnonymous();
+
+auth.MapGet("/sessions",async(ICurrentUser current,HttpContext context,ErrandRunsDbContext db,CancellationToken ct)=>
+{
+    Guid.TryParse(context.User.FindFirstValue("sid"),out var currentSession);
+    var values=await db.AccountSessions.AsNoTracking().Where(x=>x.UserId==current.UserId&&x.RevokedAt==null&&x.ExpiresAt>DateTimeOffset.UtcNow).OrderByDescending(x=>x.LastSeenAt).Select(x=>new SessionDetails(x.Id,x.DeviceName,x.Platform,x.IpAddress,x.CreatedAt,x.LastSeenAt,x.ExpiresAt,x.Id==currentSession)).ToListAsync(ct);
+    return Results.Ok(values);
+}).WithSummary("List active account sessions and devices").Produces<IReadOnlyList<SessionDetails>>().RequireAuthorization();
+
+auth.MapDelete("/sessions/{sessionId:guid}",async(Guid sessionId,ICurrentUser current,HttpContext context,ErrandRunsDbContext db,IClock clock,CancellationToken ct)=>
+{
+    var session=await db.AccountSessions.SingleOrDefaultAsync(x=>x.Id==sessionId&&x.UserId==current.UserId,ct)??throw new KeyNotFoundException("Session not found.");session.Revoke(clock.UtcNow);await db.SaveChangesAsync(ct);return Results.NoContent();
+}).WithSummary("Revoke one device session").Produces(StatusCodes.Status204NoContent).RequireAuthorization();
+
+auth.MapPost("/sessions/revoke-others",async(ICurrentUser current,HttpContext context,ErrandRunsDbContext db,IClock clock,CancellationToken ct)=>
+{
+    Guid.TryParse(context.User.FindFirstValue("sid"),out var currentSession);var sessions=await db.AccountSessions.Where(x=>x.UserId==current.UserId&&x.Id!=currentSession&&x.RevokedAt==null).ToListAsync(ct);foreach(var session in sessions)session.Revoke(clock.UtcNow);await db.SaveChangesAsync(ct);return Results.NoContent();
+}).WithSummary("Log out all other devices").Produces(StatusCodes.Status204NoContent).RequireAuthorization();
 
 // Return information about the currently authenticated account.
 auth.MapGet(
@@ -771,6 +871,9 @@ auth.MapPost(
             ChangePassword request,
             ICurrentUser current,
             IAuthenticationService accounts,
+            HttpContext context,
+            ErrandRunsDbContext db,
+            IClock clock,
             CancellationToken ct) =>
         {
             var result =
@@ -779,14 +882,14 @@ auth.MapPost(
                     request,
                     ct);
 
-            return result.Succeeded
-                ? Results.NoContent()
-                : Results.ValidationProblem(result.Errors);
+            if(!result.Succeeded)return Results.ValidationProblem(result.Errors);
+            Guid.TryParse(context.User.FindFirstValue("sid"),out var currentSession);
+            var sessions=await db.AccountSessions.Where(x=>x.UserId==current.UserId&&x.Id!=currentSession&&x.RevokedAt==null).ToListAsync(ct);
+            foreach(var session in sessions)session.Revoke(clock.UtcNow);await db.SaveChangesAsync(ct);return Results.NoContent();
         })
     .WithSummary("Change the signed-in account password")
     .WithDescription(
-        "Requires the current password. Existing access tokens remain " +
-        "valid until their expiry; sign in again after success.")
+        "Requires the current password and revokes every other device session. The current device remains signed in.")
     .Produces(StatusCodes.Status204NoContent)
     .ProducesValidationProblem(StatusCodes.Status400BadRequest)
     .ProducesProblem(StatusCodes.Status401Unauthorized)
@@ -1573,9 +1676,9 @@ app.Run();
 /// <summary>
 /// Issues stateless JWT access tokens that are validated by the JWT bearer middleware.
 /// </summary>
-public sealed class JwtTokenIssuer(IConfiguration configuration)
+public sealed class JwtTokenIssuer(IConfiguration configuration,ErrandRunsDbContext db,IClock clock)
 {
-    public AuthenticationResponse Issue(AccountDetails account)
+    public async Task<AuthenticationResponse> Issue(AccountDetails account,HttpContext context,CancellationToken ct=default)
     {
         // Read JWT configuration values.
         var jwt = configuration.GetSection("Jwt");
@@ -1587,8 +1690,13 @@ public sealed class JwtTokenIssuer(IConfiguration configuration)
 
         // Determine when the access token should expire.
         var expiresAt =
-            DateTimeOffset.UtcNow.AddMinutes(
-                jwt.GetValue<int?>("AccessTokenMinutes") ?? 60);
+            clock.UtcNow.AddMinutes(jwt.GetValue<int?>("AccessTokenMinutes") ?? 15);
+        var refreshExpiresAt=clock.UtcNow.AddDays(jwt.GetValue<int?>("RefreshTokenDays")??30);
+        var refreshToken=WebEncoders.Base64UrlEncode(RandomNumberGenerator.GetBytes(48));
+        var session=new AccountSession(Guid.NewGuid(),account.Id,Hash(refreshToken),
+            context.Request.Headers["X-Device-Name"].ToString(),context.Request.Headers["X-Device-Platform"].ToString(),
+            context.Request.Headers.UserAgent.ToString(),context.Connection.RemoteIpAddress?.ToString()??"Unknown",clock.UtcNow,refreshExpiresAt);
+        db.AccountSessions.Add(session);await db.SaveChangesAsync(ct);
 
         // Create the claims that will be embedded in the JWT.
         var claims =
@@ -1608,7 +1716,9 @@ public sealed class JwtTokenIssuer(IConfiguration configuration)
 
                 new Claim(
                     "role",
-                    account.Role)
+                    account.Role),
+                new Claim("sid",session.Id.ToString()),
+                new Claim(JwtRegisteredClaimNames.Jti,Guid.NewGuid().ToString())
             };
 
         // Create the JWT and sign it using the configured symmetric key.
@@ -1629,8 +1739,21 @@ public sealed class JwtTokenIssuer(IConfiguration configuration)
             new JwtSecurityTokenHandler().WriteToken(token),
             "Bearer",
             expiresAt,
-            account);
+            account,
+            refreshToken,
+            refreshExpiresAt,
+            session.Id);
     }
+    public async Task<AuthenticationResponse> Refresh(string refreshToken,HttpContext context,IAuthenticationService accounts,CancellationToken ct)
+    {
+        var hash=Hash(refreshToken);var now=clock.UtcNow;
+        var session=await db.AccountSessions.SingleOrDefaultAsync(x=>x.RefreshTokenHash==hash,ct);
+        if(session is null||!session.IsActive(now))throw new UnauthorizedAccessException("Refresh token is invalid or expired.");
+        var account=await accounts.GetAccount(session.UserId,ct)??throw new UnauthorizedAccessException();
+        session.Revoke(now);await db.SaveChangesAsync(ct);
+        return await Issue(account,context,ct);
+    }
+    public static string Hash(string token)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 }
 
 /// <summary>
@@ -1640,7 +1763,27 @@ public sealed record AuthenticationResponse(
     string AccessToken,
     string TokenType,
     DateTimeOffset ExpiresAt,
-    AccountDetails Account);
+    AccountDetails Account,
+    string RefreshToken,
+    DateTimeOffset RefreshTokenExpiresAt,
+    Guid SessionId);
+public sealed record RefreshAccessToken(string RefreshToken);
+public sealed record SessionDetails(Guid Id,string DeviceName,string Platform,string IpAddress,DateTimeOffset CreatedAt,DateTimeOffset LastSeenAt,DateTimeOffset ExpiresAt,bool IsCurrent);
+public sealed record TwoFactorRequired(Guid ChallengeId,string Method,DateTimeOffset ExpiresAt,string? DevelopmentCode=null);
+public sealed record VerifyLoginTwoFactor(Guid ChallengeId,string Code);
+public sealed record SecuritySettings(bool SmsTwoFactorEnabled,bool AuthenticatorAppEnabled,DateTimeOffset? PasswordChangedAt);
+public sealed record AuthenticatorSetup(string SharedKey,string OtpAuthUri);
+public sealed record EnableAuthenticator(string Code);
+public sealed record DisableAuthenticator(string CurrentPassword);
+public sealed record SetSmsTwoFactor(bool Enabled,string CurrentPassword);
+public sealed record RecoveryCodes(IReadOnlyList<string> Codes);
+public static class SecurityCode
+{
+    public static string Hash(IConfiguration configuration,Guid id,string code)
+    {var key=configuration["Jwt:SigningKey"]??throw new InvalidOperationException();return Convert.ToHexString(HMACSHA256.HashData(Encoding.UTF8.GetBytes(key),Encoding.UTF8.GetBytes($"{id:N}:{code}")));}
+    public static bool Verify(IConfiguration configuration,Guid id,string code,string expected)
+    {try{return CryptographicOperations.FixedTimeEquals(Convert.FromHexString(Hash(configuration,id,code)),Convert.FromHexString(expected));}catch(FormatException){return false;}}
+}
 
 /// <summary>
 /// Provides access to information about the currently authenticated HTTP user.

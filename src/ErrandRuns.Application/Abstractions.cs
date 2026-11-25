@@ -111,7 +111,7 @@ public interface IPhoneOtpSender
 // Authentication contracts live in the application layer so the API does not
 // depend directly on the chosen identity provider or persistence technology.
 public sealed record RegisterAccount(string DisplayName, string Email, string Password, string? PhoneNumber = null);
-public sealed record Login(string? EmailOrPhone, string Password, string? Email = null);
+public sealed record Login(string? EmailOrPhone, string Password, string? Email = null,string? TwoFactorMethod=null);
 public sealed record GoogleSignIn(string IdToken, string Role);
 public sealed record VerifiedGoogleIdentity(string Subject, string Email, string DisplayName);
 public sealed record ChangePassword(string CurrentPassword, string NewPassword);

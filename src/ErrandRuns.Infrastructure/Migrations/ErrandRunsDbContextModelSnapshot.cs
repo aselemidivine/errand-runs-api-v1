@@ -596,6 +596,100 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.ToTable("RunnerVerifications", "runners");
                 });
 
+            modelBuilder.Entity("ErrandRuns.Domain.Security.AccountSession", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DeviceName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("nvarchar(120)");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("IpAddress")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("LastSeenAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Platform")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("nvarchar(40)");
+
+                    b.Property<string>("RefreshTokenHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UserAgent")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RefreshTokenHash")
+                        .IsUnique();
+
+                    b.HasIndex("UserId", "LastSeenAt");
+
+                    b.ToTable("AccountSessions", "identity");
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Security.LoginChallenge", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("FailedAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Method")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("LoginChallenges", "identity");
+                });
+
             modelBuilder.Entity("ErrandRuns.Domain.Users.PhoneVerificationChallenge", b =>
                 {
                     b.Property<Guid>("Id")
@@ -751,6 +845,9 @@ namespace ErrandRuns.Infrastructure.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
+                    b.Property<DateTimeOffset?>("PasswordChangedAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<string>("PasswordHash")
                         .HasColumnType("nvarchar(max)");
 
@@ -773,6 +870,9 @@ namespace ErrandRuns.Infrastructure.Migrations
 
                     b.Property<string>("SecurityStamp")
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("SmsTwoFactorEnabled")
+                        .HasColumnType("bit");
 
                     b.Property<bool>("TwoFactorEnabled")
                         .HasColumnType("bit");
@@ -1124,6 +1224,24 @@ namespace ErrandRuns.Infrastructure.Migrations
                     b.HasOne("ErrandRuns.Domain.Runners.RunnerProfile", null)
                         .WithOne()
                         .HasForeignKey("ErrandRuns.Domain.Runners.RunnerVerification", "RunnerId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Security.AccountSession", b =>
+                {
+                    b.HasOne("ErrandRuns.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ErrandRuns.Domain.Security.LoginChallenge", b =>
+                {
+                    b.HasOne("ErrandRuns.Infrastructure.Identity.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

@@ -5,6 +5,7 @@ using ErrandRuns.Domain.Communications;
 using ErrandRuns.Domain.Payments;
 using ErrandRuns.Domain.Runners;
 using ErrandRuns.Domain.Reviews;
+using ErrandRuns.Domain.Security;
 using ErrandRuns.Domain.Users;
 using ErrandRuns.Infrastructure.Identity;
 using Microsoft.AspNetCore.Identity;
@@ -14,7 +15,7 @@ namespace ErrandRuns.Infrastructure;
 
 public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> options) : IdentityDbContext<ApplicationUser, IdentityRole<Guid>, Guid>(options)
 {
-    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<RunnerVerification> RunnerVerifications => Set<RunnerVerification>(); public DbSet<RunnerDeclinedOffer> RunnerDeclinedOffers => Set<RunnerDeclinedOffer>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>(); public DbSet<SavedLocation> SavedLocations => Set<SavedLocation>(); public DbSet<PhoneVerificationChallenge> PhoneVerificationChallenges => Set<PhoneVerificationChallenge>(); public DbSet<ErrandReview> Reviews => Set<ErrandReview>();
+    public DbSet<Errand> Errands => Set<Errand>(); public DbSet<RunnerProfile> Runners => Set<RunnerProfile>(); public DbSet<RunnerVerification> RunnerVerifications => Set<RunnerVerification>(); public DbSet<RunnerDeclinedOffer> RunnerDeclinedOffers => Set<RunnerDeclinedOffer>(); public DbSet<Payment> Payments => Set<Payment>(); public DbSet<RunnerLedgerEntry> RunnerLedger => Set<RunnerLedgerEntry>(); public DbSet<RunnerPayoutAccount> RunnerPayoutAccounts => Set<RunnerPayoutAccount>(); public DbSet<RunnerPayout> RunnerPayouts => Set<RunnerPayout>(); public DbSet<UserNotification> Notifications => Set<UserNotification>(); public DbSet<Conversation> Conversations => Set<Conversation>(); public DbSet<VoiceCallSession> VoiceCalls => Set<VoiceCallSession>(); public DbSet<SavedLocation> SavedLocations => Set<SavedLocation>(); public DbSet<PhoneVerificationChallenge> PhoneVerificationChallenges => Set<PhoneVerificationChallenge>(); public DbSet<ErrandReview> Reviews => Set<ErrandReview>(); public DbSet<AccountSession> AccountSessions=>Set<AccountSession>(); public DbSet<LoginChallenge> LoginChallenges=>Set<LoginChallenge>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         base.OnModelCreating(b);
@@ -43,6 +44,8 @@ public sealed class ErrandRunsDbContext(DbContextOptions<ErrandRunsDbContext> op
         b.Entity<Conversation>(e => { e.ToTable("Conversations", "communications"); e.HasKey(x => x.Id); e.HasIndex(x => x.ErrandId).IsUnique(); e.HasIndex(x => x.CustomerId); e.HasIndex(x => x.RunnerId); e.OwnsMany(x => x.Messages, m => { m.ToTable("Messages", "communications"); m.WithOwner().HasForeignKey("ConversationId"); m.HasKey(x => x.Id); m.Property(x => x.Body).HasMaxLength(2000); m.HasIndex("ConversationId", nameof(ChatMessage.SentAt)); }); });
         b.Entity<VoiceCallSession>(e => { e.ToTable("VoiceCalls", "communications"); e.HasKey(x => x.Id); e.Property(x => x.EndReason).HasMaxLength(240); e.HasIndex(x => new { x.ConversationId, x.CreatedAt }); e.HasIndex(x => new { x.CalleeId, x.Status }); });
         b.Entity<ErrandReview>(e=>{e.ToTable("ErrandReviews","reviews");e.HasKey(x=>x.Id);e.Property(x=>x.Comment).HasMaxLength(1000);e.HasIndex(x=>new{x.ErrandId,x.ReviewerId}).IsUnique();e.HasIndex(x=>new{x.RevieweeId,x.CreatedAt});e.HasOne<Errand>().WithMany().HasForeignKey(x=>x.ErrandId).OnDelete(DeleteBehavior.Cascade);e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.ReviewerId).OnDelete(DeleteBehavior.NoAction);e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.RevieweeId).OnDelete(DeleteBehavior.NoAction);});
+        b.Entity<AccountSession>(e=>{e.ToTable("AccountSessions","identity");e.HasKey(x=>x.Id);e.Property(x=>x.RefreshTokenHash).HasMaxLength(64);e.Property(x=>x.DeviceName).HasMaxLength(120);e.Property(x=>x.Platform).HasMaxLength(40);e.Property(x=>x.UserAgent).HasMaxLength(500);e.Property(x=>x.IpAddress).HasMaxLength(64);e.HasIndex(x=>x.RefreshTokenHash).IsUnique();e.HasIndex(x=>new{x.UserId,x.LastSeenAt});e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.UserId).OnDelete(DeleteBehavior.Cascade);});
+        b.Entity<LoginChallenge>(e=>{e.ToTable("LoginChallenges","identity");e.HasKey(x=>x.Id);e.Property(x=>x.Method).HasMaxLength(20);e.Property(x=>x.CodeHash).HasMaxLength(64);e.HasIndex(x=>new{x.UserId,x.CreatedAt});e.HasOne<ApplicationUser>().WithMany().HasForeignKey(x=>x.UserId).OnDelete(DeleteBehavior.Cascade);});
     }
 }
 
